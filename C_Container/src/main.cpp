@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cstdlib>   // rand, RAND_MAX
 #include <cstring>   // memset
+#include <ctime>     // for clock(), CLOCKS_PER_SEC
 
 static double urand() {
     return 2.0 * (double)std::rand() / (double)RAND_MAX - 1.0;
@@ -11,7 +12,7 @@ static double urand() {
 
 int main() {
     std::size_t n = 6;              // state dim
-    std::size_t tracks = 8;         // number of tracks
+    std::size_t tracks = 1000;         // number of tracks
 
     // Build F = I (for demo), Q = 0.01*I
     std::vector<double> Fbuf(n*n, 0.0), Qbuf(n*n, 0.0);
@@ -43,8 +44,16 @@ int main() {
     // 1) P_i += q I (batch)
     la::add_diag_noise_batch(Pbatch, 0.05);
 
+    // --- Start timer here ---
+    std::clock_t t0 = std::clock();
+
     // 2) P_i <- F P_i F^T + Q (batch)
     la::cov_predict_batch(F, Q, Pbatch);
+    
+    // --- Stop timer ---
+    std::clock_t t1 = std::clock();
+    double dt_sec = double(t1 - t0) / double(CLOCKS_PER_SEC);
+    std::cout << "Batch update time = " << dt_sec << " s" << std::endl;
 
     // quick checksum
     double sum = 0.0;
