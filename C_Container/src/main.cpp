@@ -1,50 +1,54 @@
 // src/main.cpp
 #include "la.h"
 #include <vector>
-#include <cstdlib>
 #include <iostream>
-// ... existing includes ...
-#include <cstring> // memset
+#include <cstdlib>   // rand, RAND_MAX
+#include <cstring>   // memset
+
+static double urand() {
+    return 2.0 * (double)std::rand() / (double)RAND_MAX - 1.0;
+}
 
 int main() {
-    const std::size_t n = 6;
-    const std::size_t tracks = 4;
+    std::size_t n = 6;              // state dim
+    std::size_t tracks = 8;         // number of tracks
 
-    // Allocate Ps (row-major, stride=n)
-    std::vector< std::vector<double> > Pbuf(tracks, std::vector<double>(n*n, 0.0));
-    std::vector<la::MatrixView> Pviews(tracks);
-    for (std::size_t i=0;i<tracks;++i) {
-        // simple PD-ish seed
-        for (std::size_t r=0;r<n;++r)
-          for (std::size_t c=0;c<n;++c)
-            Pbuf[i][r*n + c] = (r==c) ? 1.0 : 0.1;
-
-        Pviews[i].ptr = &Pbuf[i][0];
-        Pviews[i].rows = n; Pviews[i].cols = n; Pviews[i].stride = n;
+    // Build F = I (for demo), Q = 0.01*I
+    std::vector<double> Fbuf(n*n, 0.0), Qbuf(n*n, 0.0);
+    for (std::size_t i=0;i<n;++i) {
+        Fbuf[i*n+i] = 1.0;
+        Qbuf[i*n+i] = 0.01;
     }
-
-    // Build F (constant across tracks)
-    std::vector<double> Fbuf(n*n, 0.0);
-    for (std::size_t i=0;i<n;++i) Fbuf[i*n + i] = 1.0; // identity for demo
     la::MatrixView F; F.ptr=&Fbuf[0]; F.rows=n; F.cols=n; F.stride=n;
-
-    // Build Q (process noise)
-    std::vector<double> Qbuf(n*n, 0.0);
-    for (std::size_t i=0;i<n;++i) Qbuf[i*n + i] = 0.01; // small diag noise
     la::MatrixView Q; Q.ptr=&Qbuf[0]; Q.rows=n; Q.cols=n; Q.stride=n;
 
-    // 1) Bump diagonals: P += q I (batch)
-    la::add_diag_noise_batch(&Pviews[0], tracks, 0.05);
+    // Batch of P_i (row-major, contiguous; stride = n*n, ld = n)
+    std::vector<double> Pblock(tracks * n * n, 0.0);
+    for (std::size_t t=0; t<tracks; ++t) {
+        double* Pi = &Pblock[t * n * n];
+        // seed each P with a random SPD-ish matrix (diagonal-dominant)
+        for (std::size_t r=0;r<n;++r) {
+            for (std::size_t c=0;c<n;++c) {
+                Pi[r*n + c] = (r==c) ? 1.0 : 0.1*urand();
+            }
+        }
+    }
+    la::BatchMat Pbatch;
+    Pbatch.base   = &Pblock[0];
+    Pbatch.n      = n;
+    Pbatch.ld     = n;
+    Pbatch.stride = n * n;
+    Pbatch.count  = tracks;
 
-    // 2) Full prediction: P <- F P F^T + Q (batch)
-    la::cov_predict_batch(F, Q, &Pviews[0], tracks);
+    // 1) P_i += q I (batch)
+    la::add_diag_noise_batch(Pbatch, 0.05);
 
-    // print a quick checksum
-    double sum=0.0;
-    for (std::size_t i=0;i<tracks;++i)
-      for (std::size_t j=0;j<n*n;++j)
-        sum += Pbuf[i][j];
+    // 2) P_i <- F P_i F^T + Q (batch)
+    la::cov_predict_batch(F, Q, Pbatch);
 
+    // quick checksum
+    double sum = 0.0;
+    for (std::size_t i=0;i<Pblock.size();++i) sum += Pblock[i];
     std::cout << "batch sum(P) = " << sum << std::endl;
     return 0;
 }

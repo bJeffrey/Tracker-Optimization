@@ -1,4 +1,3 @@
-// src/la_eigen.cpp
 #include "la.h"
 #include <Eigen/Dense>
 #include <cassert>
@@ -20,47 +19,43 @@ void gemm(bool tA, bool tB, double alpha,
     if (tA) Al = Am.transpose(); else Al = Am;
     if (tB) Bl = Bm.transpose(); else Bl = Bm;
 
+    // Let Eigen handle vectorization
     Cm = alpha * (Al * Bl) + beta * Cm;
 }
 
-void add_diag_noise_batch(MatrixView* P_list,
-                          std::size_t count,
-                          double q)
+void add_diag_noise_batch(const BatchMat& Pbatch, double q)
 {
     typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> Mat;
-    for (std::size_t i = 0; i < count; ++i) {
-        MatrixView& Pv = P_list[i];
-        assert(Pv.rows == Pv.cols);
-        Eigen::Map<Mat> Pm(Pv.ptr, Pv.rows, Pv.cols);
+    for (std::size_t i = 0; i < Pbatch.count; ++i) {
+        double* Pi = Pbatch.base + i * Pbatch.stride;
+        Eigen::Map<Mat> Pm(Pi, Pbatch.n, Pbatch.n);
         Pm.diagonal().array() += q;
     }
 }
 
 void cov_predict_batch(const MatrixView& Fv,
                        const MatrixView& Qv,
-                       MatrixView* P_list,
-                       std::size_t count)
+                       const BatchMat&   Pbatch)
 {
     typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> Mat;
 
     assert(Fv.rows == Fv.cols);
     assert(Qv.rows == Qv.cols);
     assert(Fv.rows == Qv.rows);
+    assert(Pbatch.n  == Fv.rows);
 
-    Eigen::Map<const Mat> F(Fv.ptr, Fv.rows, Fv.cols);
-    Eigen::Map<const Mat> Q(Qv.ptr, Qv.rows, Qv.cols);
-    Mat Ft = F.transpose();
+    const Eigen::Map<const Mat> F(Fv.ptr, Fv.rows, Fv.cols);
+    const Eigen::Map<const Mat> Q(Qv.ptr, Qv.rows, Qv.cols);
+    const Mat Ft = F.transpose();
 
-    for (std::size_t i = 0; i < count; ++i) {
-        MatrixView& Pv = P_list[i];
-        assert(Pv.rows == Pv.cols);
-        assert(Pv.rows == (std::size_t)F.rows());
+    for (std::size_t i = 0; i < Pbatch.count; ++i) {
+        double* Pi = Pbatch.base + i * Pbatch.stride;
+        Eigen::Map<Mat> P(Pi, Pbatch.n, Pbatch.n);
 
-        Eigen::Map<Mat> P(Pv.ptr, Pv.rows, Pv.cols);
-
-        Mat FP = F * P;      // FP = F * P
-        P = FP * Ft;         // P  = FP * F^T
-        P += Q;              // P += Q
+        // P <- F P F^T + Q
+        Mat FP = F * P;
+        P.noalias() = FP * Ft;
+        P += Q;
     }
 }
 

@@ -3,25 +3,36 @@
 
 namespace la {
 
+// Simple row-major matrix view
 struct MatrixView {
     double* ptr;
-    std::size_t rows, cols, stride; // row-major
+    std::size_t rows;
+    std::size_t cols;
+    std::size_t stride; // leading dimension in elements (usually cols for row-major)
 };
 
-// Existing:
+// Strided batch descriptor: a set of n x n matrices laid out one after another
+struct BatchMat {
+    double*      base;    // pointer to first matrix
+    std::size_t  n;       // rows == cols
+    std::size_t  ld;      // leading dimension (elements), usually n
+    std::size_t  stride;  // distance (elements) between consecutive matrices, usually n*n
+    std::size_t  count;   // number of matrices
+};
+
+// Single GEMM wrapper (row-major):
+//   C = alpha * op(A) * op(B) + beta * C
 void gemm(bool transA, bool transB,
           double alpha, const MatrixView& A, const MatrixView& B,
           double beta,        MatrixView& C);
 
-// NEW 1: Add scalar process noise to the diagonal of many P's: P += q * I
-void add_diag_noise_batch(MatrixView* P_list,
-                          std::size_t count,
-                          double q);
+// Batch diagonal noise bump: for all i,  P_i <- P_i + q I
+void add_diag_noise_batch(const BatchMat& Pbatch, double q);
 
-// NEW 2: Covariance prediction in batch: P <- F P F^T + Q (same F,Q for all)
+// Batch covariance prediction (same F, Q for all tracks):
+//   For all i, P_i <- F * P_i * F^T + Q
 void cov_predict_batch(const MatrixView& F,
                        const MatrixView& Q,
-                       MatrixView* P_list,
-                       std::size_t count);
+                       const BatchMat&   Pbatch);
 
 } // namespace la
