@@ -1,174 +1,164 @@
-# simple-la — Portable C++98 Linear Algebra Starter (Eigen or MKL)
+# Linear Algebra Abstraction Framework (Offline-Ready)
 
-A tiny C++98 starter that multiplies two matrices through a single API, with **either Eigen or Intel MKL** behind the scenes.  
-You choose **one backend per image** at build time.
-
-This repo includes an **offline-friendly flow (Option B)**:
-- Build two **dev base** images **online** (once), save them to `.tar`.
-- On an **offline** machine, load those bases and rebuild the app images locally.
+This repository demonstrates an extensible C++98 linear algebra abstraction framework that can switch seamlessly between **Eigen**, **Intel MKL**, and **pure standard C++98** (no dependencies).  
+It also supports **offline builds** via prebuilt toolchain base images (`devbase` concept).
 
 ---
 
-## Repo layout
+## 🧱 Repository Overview
+
+| Backend | Library Used | Purpose | Build Option |
+|----------|---------------|----------|---------------|
+| **Eigen** | Eigen3 | Portable high-performance default | `-DUSE_MKL=OFF -DUSE_STD=OFF` |
+| **MKL** | Intel MKL | Optimized for Intel CPUs | `-DUSE_MKL=ON` |
+| **STD** | None (C++98 only) | Baseline reference; offline safe | `-DUSE_STD=ON` |
+
+All backends share the same API, with batch processing support for updating multiple tracks (e.g., radar track covariances) simultaneously.
+
+---
+
+## 🧩 Directory Layout
 
 ```
-.
-├─ CMakeLists.txt
-├─ include/
-│  └─ la.h
-├─ src/
-│  ├─ la_eigen.cpp
-│  ├─ la_mkl.cpp
-│  └─ main.cpp
-├─ devbase-eigen.Dockerfile   # build online once
-├─ devbase-mkl.Dockerfile     # build online once
-├─ app-eigen.Dockerfile       # rebuild offline using dev base
-└─ app-mkl.Dockerfile         # rebuild offline using dev base
+include/
+  la.h                # Common interface
+src/
+  la_eigen.cpp        # Eigen backend
+  la_mkl.cpp          # Intel MKL backend
+  la_std.cpp          # Pure C++98 backend
+  main.cpp            # Demo driver + timing example
+CMakeLists.txt        # Unified build configuration
+Dockerfile variants   # Offline + online build targets
 ```
 
-- **C++ standard:** C++98 (set in CMake or Docker build lines).
-- **Backend selection:** `Eigen` or `MKL` (one per build).
-
 ---
 
-## Prerequisites
+## 🚀 Build Options
 
-- Docker Desktop (Windows/macOS) or Docker Engine (Linux)
-- Internet access **only** on the machine used to build the **dev base** images (for MKL packages / apt repos)
+### Online Builds
 
-> On Windows, run commands in **PowerShell**; on macOS/Linux, use a shell (bash/zsh). Replace `\` line continuations with backticks <code>`</code> in PowerShell if needed.
-
----
-
-## ✅ Quick start (Online only)
-
-If you don’t need offline support, you can build and run directly with the **online** multi-stage flow (Option 1).  
-Use MKL variant only if you actually need MKL; otherwise, Eigen is simpler and smaller.
-
+#### Eigen (default)
 ```bash
-# Eigen-only image (no MKL)
-docker build -t la-demo:eigen .
-
-# With MKL (downloads oneAPI repo & packages)
-docker build -t la-demo:mkl --build-arg USE_MKL=1 .
-
-# Run
-docker run --rm la-demo:eigen
-docker run --rm la-demo:mkl
-```
-
-You should see output like:
-```
-sum(C)=<some number>
-```
-
-If you need **offline** usage, follow the steps below to pre-stage dev bases.
-
----
-
-## Option B — Offline-friendly workflow
-
-### 1) Build **dev base** images online (once)
-
-These include compilers, CMake, Ninja, and either Eigen or MKL.  
-Do this **on a machine with internet access**:
-
-```bash
-# From the repo root
-docker build -t devbase:eigen -f devbase-eigen.Dockerfile .
-docker build -t devbase:mkl   -f devbase-mkl.Dockerfile   .
-
-# Save for transfer to offline machine
-docker save -o devbase-eigen.tar devbase:eigen
-docker save -o devbase-mkl.tar   devbase:mkl
-```
-
-> Tip: Also save the **project source** (this repo) and carry it along with the `.tar` files.
-
----
-
-### 2) Move to the **offline** machine
-
-Copy these files to the offline host (USB, etc.):  
-- `devbase-eigen.tar`  
-- `devbase-mkl.tar`  
-- The project source directory (this repo)
-
-Load the dev bases:
-
-```bash
-docker load -i devbase-eigen.tar
-docker load -i devbase-mkl.tar
-```
-
----
-
-### 3) Build the **app images** offline
-
-Now, with the dev bases available locally, rebuild the app layers completely **offline**:
-
-```bash
-# Eigen app (offline)
 docker build -t la-demo:eigen -f app-eigen.Dockerfile .
-
-# MKL app (offline)
-docker build -t la-demo:mkl   -f app-mkl.Dockerfile   .
+docker run --rm la-demo:eigen
 ```
 
-> These app Dockerfiles do **not** reach the network. They use the preloaded dev bases and your local source only.
+#### MKL
+```bash
+docker build -t la-demo:mkl -f app-mkl.Dockerfile .
+docker run --rm -e MKL_NUM_THREADS=1 -e OMP_NUM_THREADS=1 la-demo:mkl
+```
+
+#### STD (baseline)
+```bash
+docker build -t la-demo:std -f app-std.Dockerfile .
+docker run --rm la-demo:std
+```
 
 ---
 
-### 4) Run (offline)
+## 📴 Offline Workflow
+
+### 1️⃣ Build Base Image Online
+
+**devbase-std.Dockerfile**
+```dockerfile
+FROM ubuntu:22.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build pkg-config ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+```
+
+Build & export it once (online):
+```bash
+docker build -t devbase:std -f devbase-std.Dockerfile .
+docker save -o devbase-std.tar devbase:std
+# Optional: docker save -o ubuntu-22.04.tar ubuntu:22.04
+```
+
+Copy the following to your offline system:
+- `devbase-std.tar`
+- (optional) `ubuntu-22.04.tar`
+- This project directory
+
+---
+
+### 2️⃣ Load Base Image Offline
 
 ```bash
-docker run --rm la-demo:eigen
-docker run --rm la-demo:mkl
+docker load -i devbase-std.tar
+# Optional: docker load -i ubuntu-22.04.tar
 ```
 
-Expected output:
+Verify:
+```bash
+docker images | grep devbase
 ```
-sum(C)=<some number>
+
+---
+
+### 3️⃣ Build App Offline
+
+**app-std.Dockerfile**
+```dockerfile
+FROM devbase:std
+WORKDIR /src
+COPY . /src
+RUN cmake -S . -B /build -G Ninja \
+      -DUSE_STD=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=98 && \
+    cmake --build /build -j
+ENTRYPOINT ["/build/demo"]
+```
+
+Build it offline:
+```bash
+docker build -t la-demo:std -f app-std.Dockerfile .
+```
+
+Run:
+```bash
+docker run --rm la-demo:std
 ```
 
 ---
 
-## Notes & tips
+## 🧮 Example Output
 
-- **When to use MKL:** Only if you’re running on x86 and actually want MKL’s tuned BLAS/LAPACK. The MKL dev base is larger and requires the oneAPI apt repo during its **online** build.
-- **CMake options:**
-  - `-DUSE_MKL=OFF` compiles the Eigen backend (`app-eigen.Dockerfile` already does this).
-  - `-DUSE_MKL=ON` compiles the MKL backend (`app-mkl.Dockerfile` already does this).
-- **C++98:** Both Docker paths set/expect C++98; the code and CMake are compatible.
-- **Windows/macOS:** All Linux commands run inside the Linux containers; you don’t need host toolchains.
-- **Rebuilding offline:** Just re-run the `docker build` commands for the app images. No internet needed as long as the dev bases are loaded.
+```
+Initializing 1000 tracks...
+Batch update wall time = 0.008765 s
+Checksum: 1.23456e+03
+```
 
 ---
 
-## Troubleshooting
+## ⚙️ Thread Control
 
-- **MKL repo/key errors (online dev base build):**
-  - Ensure the key URL in `devbase-mkl.Dockerfile` is reachable:
-    `https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB`
-  - Corporate proxies may require adding a CA certificate or proxy env vars (`http_proxy`, `https_proxy`) **just for the dev base build**.
-
-- **“file not found” / missing Dockerfiles:**
-  - Run builds from the repo root where the Dockerfiles and `CMakeLists.txt` live.
-
-- **No output or unexpected sum:**
-  - Rebuild images to ensure the latest source is inside:
-    ```bash
-    docker build --no-cache -t la-demo:eigen -f app-eigen.Dockerfile .
-    ```
+| Backend | Variable | Example |
+|----------|-----------|----------|
+| **MKL** | `MKL_NUM_THREADS` | `docker run -e MKL_NUM_THREADS=4 la-demo:mkl` |
+| **Eigen (OpenMP)** | `OMP_NUM_THREADS` | `docker run -e OMP_NUM_THREADS=4 la-demo:eigen` |
+| **STD** | single-threaded | N/A |
 
 ---
 
-## What’s next?
+## 🧠 Tips
 
-- Add more ops to `include/la.h` (e.g., `gemv`, `potrf`, `trsm`) and implement them in both `la_eigen.cpp` and `la_mkl.cpp`.
-- Create simple unit tests and a tiny benchmark target to compare Eigen vs MKL.
-- If you later want a **host-native** build (no Docker), use the provided `configure.sh` / `configure.ps1` pattern to select MKL or Eigen at build time.
+- Always build with **`-DCMAKE_BUILD_TYPE=Release`** for accurate performance.
+- Small matrices (e.g., 6×6) may perform faster in Eigen or STD than MKL (overhead).
+- MKL shows its advantage for larger matrices and when multithreaded.
+- Add OpenMP later to parallelize Eigen or STD outer loops.
 
 ---
 
-Happy building! If you want this README customized for your internal registry (saving/loading to a private Harbor/ECR/GCR, etc.), I can add those commands too.
+## 🧩 Future Extensions
+
+- Add OpenMP or TBB parallelization for the outer batch loop.
+- Extend MKL path to handle variable-sized matrices per track.
+- Add timing utilities and CSV output for performance sweeps.
+- Integrate unit tests (GoogleTest or Catch2).
+
+---
+
+© 2025 Jeffrey Noe — MIT License

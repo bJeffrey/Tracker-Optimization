@@ -11,7 +11,11 @@ WORKDIR /src
 COPY . /src
 
 # Build (Eigen backend only, C++98)
-RUN cmake -S . -B /build -G Ninja -DUSE_MKL=OFF -DCMAKE_CXX_STANDARD=98 && \
+#RUN cmake -S . -B /build -G Ninja -DUSE_MKL=OFF -DCMAKE_CXX_STANDARD=98 && \
+#    cmake --build /build -j
+
+RUN cmake -S . -B /build -G Ninja -DUSE_MKL=OFF -DCMAKE_CXX_STANDARD=98 -DCMAKE_BUILD_TYPE=Release && \
     cmake --build /build -j
+
 
 ENTRYPOINT ["/build/demo"]

@@ -11,9 +11,15 @@ WORKDIR /src
 COPY . /src
 
 # Build (MKL backend only, C++98)
+#RUN cmake -S . -B /build -G Ninja \
+#    -DUSE_MKL=ON -DCMAKE_CXX_STANDARD=98 \
+#    -DCMAKE_PREFIX_PATH=/opt/intel/oneapi/mkl/latest/lib/cmake && \
+#    cmake --build /build -j
+
 RUN cmake -S . -B /build -G Ninja \
-    -DUSE_MKL=ON -DCMAKE_CXX_STANDARD=98 \
+    -DUSE_MKL=ON -DCMAKE_CXX_STANDARD=98 -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_PREFIX_PATH=/opt/intel/oneapi/mkl/latest/lib/cmake && \
     cmake --build /build -j
+
 
 ENTRYPOINT ["/build/demo"]

@@ -12,7 +12,7 @@ static double urand() {
 
 int main() {
     std::size_t n = 6;              // state dim
-    std::size_t tracks = 1000;         // number of tracks
+    std::size_t tracks = 10000;         // number of tracks
 
     // Build F = I (for demo), Q = 0.01*I
     std::vector<double> Fbuf(n*n, 0.0), Qbuf(n*n, 0.0);
