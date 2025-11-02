@@ -1,10 +1,40 @@
+/**
+ * @file la_mkl.cpp
+ * @brief Intel MKL backend for linear-algebra routines (row-major, C++98).
+ *
+ * @details
+ *   Implements the la.h API using Intel MKL BLAS for high performance on Intel
+ *   CPUs. Functions cover single GEMM, batch covariance propagation, Δt-scaled
+ *   random-walk updates (diagonal/full Q), and numeric symmetrization.
+ *
+ *   Conventions:
+ *     - Row-major storage throughout.
+ *     - MatrixView::stride and BatchMat::ld are leading dimensions (elements).
+ *     - BatchMat::stride is the element distance between consecutive n×n blocks.
+ *     - Batch ops process covariances independently (no cross-covariances).
+ *
+ *   Notes:
+ *     - Uses cblas_dgemm_batch_strided where available (one F reused across batch).
+ *     - Falls back to cblas_dgemm_batch in cov_predict_batch_dt for portability.
+ *     - All code is C++98 compatible: no auto, nullptr, range-for, etc.
+ */
+
 #include "la.h"
 #include <mkl.h>
 #include <cassert>
 
 namespace la {
 
-// Single GEMM
+/**
+ * @brief Matrix multiply (row-major): C ← alpha * op(A) * op(B) + beta * C
+ *
+ * @param tA   If true, use A^T; else use A.
+ * @param tB   If true, use B^T; else use B.
+ * @param alpha Scalar multiplier for product term.
+ * @param A,B   Input matrices (row-major views).
+ * @param beta  Scalar multiplier for existing C.
+ * @param C     Output matrix (row-major view), updated in place.
+ */
 void gemm(bool tA, bool tB, double alpha,
           const MatrixView& A, const MatrixView& B,
           double beta, MatrixView& C)
@@ -22,7 +52,13 @@ void gemm(bool tA, bool tB, double alpha,
                 beta,  C.ptr, (MKL_INT)C.stride);
 }
 
-// Add q*I to each P
+/**
+ * @brief Add a diagonal bump to every covariance in the batch:
+ *        ∀b: P_b ← P_b + q * I
+ *
+ * @param Pbatch Batch descriptor (n×n, ld, stride, count).
+ * @param q      Diagonal increment applied to each P_b.
+ */
 void add_diag_noise_batch(const BatchMat& Pbatch, double q)
 {
     for (std::size_t b = 0; b < Pbatch.count; ++b) {
@@ -32,7 +68,13 @@ void add_diag_noise_batch(const BatchMat& Pbatch, double q)
     }
 }
 
-// P_i <- F * P_i * F^T + Q (same F,Q; row-major; ld=n; stride=n*n)
+/**
+ * @brief Batch covariance prediction with absolute Q (not Δt-scaled):
+ *        ∀b: P_b ← F * P_b * Fᵀ + Q
+ *
+ * Assumes tight row-major for F, Q, and each P (ld = n, stride = n*n).
+ * Uses strided batched GEMM to compute FP and then FP * Fᵀ.
+ */
 void cov_predict_batch(const MatrixView& Fv,
                        const MatrixView& Qv,
                        const BatchMat&   Pbatch)
@@ -41,41 +83,41 @@ void cov_predict_batch(const MatrixView& Fv,
     assert(Qv.rows == Qv.cols);
     assert(Fv.rows == Qv.rows);
     assert(Pbatch.n == Fv.rows);
-    assert(Pbatch.ld == Pbatch.n);          // assume tight row-major
+    assert(Pbatch.ld == Pbatch.n);          // assume tight row-major P
     assert(Fv.stride == Fv.cols);           // tight F
     assert(Qv.stride == Qv.cols);           // tight Q
 
     const MKL_INT n = (MKL_INT)Pbatch.n;
     const MKL_INT batch = (MKL_INT)Pbatch.count;
 
-    // Scratch FP block, contiguous (n*n per batch)
+    // Scratch FP block: contiguous storage of n*n per batch item.
     const std::size_t mat_elems = (std::size_t)n * (std::size_t)n;
     double* FP = (double*)mkl_malloc(sizeof(double) * mat_elems * batch, 64);
-    if (!FP) { /* fallback: do per-track dgemm if desired */ return; }
+    if (!FP) { /* Optional: fall back to per-item dgemm here */ return; }
 
-    // 1) FP_i = F * P_i       (strided batched)
+    // (1) FP_b = F * P_b   (re-use same F for all b via strideA=0)
     cblas_dgemm_batch_strided(
         CblasRowMajor, CblasNoTrans, CblasNoTrans,
         n, n, n,
         1.0,
-        Fv.ptr, (MKL_INT)Fv.stride, /*strideA=*/0,              // same F for all
+        Fv.ptr, (MKL_INT)Fv.stride, /*strideA=*/0,
         Pbatch.base, (MKL_INT)Pbatch.ld, (MKL_INT)Pbatch.stride,
         0.0,
         FP, n, (MKL_INT)mat_elems,
         batch);
 
-    // 2) P_i = FP_i * F^T     (strided batched; use TransB)
+    // (2) P_b = FP_b * Fᵀ   (re-use same F as B with TransB)
     cblas_dgemm_batch_strided(
         CblasRowMajor, CblasNoTrans, CblasTrans,
         n, n, n,
         1.0,
         FP, n, (MKL_INT)mat_elems,
-        Fv.ptr, (MKL_INT)Fv.stride, /*strideB=*/0,             // reuse F as B^T
+        Fv.ptr, (MKL_INT)Fv.stride, /*strideB=*/0,
         0.0,
         Pbatch.base, (MKL_INT)Pbatch.ld, (MKL_INT)Pbatch.stride,
         batch);
 
-    // 3) P_i += Q  (simple loop; tiny n)
+    // (3) P_b += Q   (tiny n → simple loop is fine)
     for (std::size_t b = 0; b < Pbatch.count; ++b) {
         double* Pi = Pbatch.base + b * Pbatch.stride;
         for (MKL_INT r = 0; r < n; ++r) {
@@ -89,6 +131,10 @@ void cov_predict_batch(const MatrixView& Fv,
     mkl_free(FP);
 }
 
+/**
+ * @brief Δt-scaled random-walk with diagonal noise:
+ *        ∀b: P_b ← P_b + (q_per_sec * dt) * I
+ */
 void cov_predict_rw_diag_dt(const BatchMat& Pbatch,
                             double q_per_sec,
                             double dt)
@@ -96,31 +142,42 @@ void cov_predict_rw_diag_dt(const BatchMat& Pbatch,
     add_diag_noise_batch(Pbatch, q_per_sec * dt);
 }
 
+/**
+ * @brief Δt-scaled random-walk with full Q:
+ *        ∀b: P_b ← P_b + (Q_per_sec * dt)
+ */
 void cov_predict_rw_fullQ_dt(const MatrixView& Qps,
                              double dt,
                              const BatchMat& Pbatch)
 {
-    assert(Qps.rows==Qps.cols && Qps.rows==Pbatch.n);
+    assert(Qps.rows == Qps.cols && Qps.rows == Pbatch.n);
     const MKL_INT n   = (MKL_INT)Pbatch.n;
     const MKL_INT ldQ = (MKL_INT)Qps.stride;
 
-    for (std::size_t i=0;i<Pbatch.count;++i) {
+    for (std::size_t i = 0; i < Pbatch.count; ++i) {
         double* Pi = Pbatch.base + i * Pbatch.stride;
-        for (MKL_INT r=0;r<n;++r) {
+        for (MKL_INT r = 0; r < n; ++r) {
             double* prow = Pi + r * (MKL_INT)Pbatch.ld;
             const double* qrow = Qps.ptr + r * ldQ;
-            for (MKL_INT c=0;c<n;++c) prow[c] += qrow[c] * dt;
+            for (MKL_INT c = 0; c < n; ++c) prow[c] += qrow[c] * dt;
         }
     }
 }
 
+/**
+ * @brief General Δt-scaled batch propagation:
+ *        ∀b: P_b ← F * P_b * Fᵀ + (Q_per_sec * dt)
+ *
+ * Uses cblas_dgemm_batch (pointer arrays) for portability, then adds Q*dt.
+ */
 void cov_predict_batch_dt(const MatrixView& Fv,
                           const MatrixView& Qps,
                           double dt,
                           const BatchMat& Pbatch)
 {
-    // same as cov_predict_batch, but add Qps*dt
-    assert(Fv.rows==Fv.cols && Qps.rows==Qps.cols && Fv.rows==Qps.rows && Pbatch.n==Fv.rows);
+    // Dimension checks
+    assert(Fv.rows == Fv.cols && Qps.rows == Qps.cols &&
+           Fv.rows == Qps.rows && Pbatch.n == Fv.rows);
 
     const MKL_INT n   = (MKL_INT)Fv.rows;
     const MKL_INT ldF = (MKL_INT)Fv.stride;
@@ -130,7 +187,7 @@ void cov_predict_batch_dt(const MatrixView& Fv,
     double* FP = (double*)mkl_malloc(sizeof(double) * mat_elems * Pbatch.count, 64);
     if (!FP) return;
 
-    // FP = F * P (batched)
+    // (1) FP = F * P (batched pointer arrays)
     {
         const MKL_INT group_count = 1;
         MKL_INT m_arr[1]   = { n }, n_arr[1] = { n }, k_arr[1] = { n };
@@ -139,14 +196,14 @@ void cov_predict_batch_dt(const MatrixView& Fv,
         double alpha_arr[1] = { 1.0 }, beta_arr[1] = { 0.0 };
         MKL_INT group_size[1] = { (MKL_INT)Pbatch.count };
 
-        const double** A_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
-        const double** B_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
-        double**       C_array = (double**)      mkl_malloc(sizeof(double*)*Pbatch.count,64);
+        const double** A_array = (const double**)mkl_malloc(sizeof(double*) * Pbatch.count, 64);
+        const double** B_array = (const double**)mkl_malloc(sizeof(double*) * Pbatch.count, 64);
+        double**       C_array = (double**)      mkl_malloc(sizeof(double*) * Pbatch.count, 64);
 
-        for (std::size_t i=0;i<Pbatch.count;++i) {
-            A_array[i] = Fv.ptr;
-            B_array[i] = Pbatch.base + i * Pbatch.stride;
-            C_array[i] = FP           + i * mat_elems;
+        for (std::size_t i = 0; i < Pbatch.count; ++i) {
+            A_array[i] = Fv.ptr;                              // same F for all
+            B_array[i] = Pbatch.base + i * Pbatch.stride;     // P_i
+            C_array[i] = FP           + i * mat_elems;        // FP_i
         }
 
         cblas_dgemm_batch(CblasRowMajor,
@@ -162,7 +219,7 @@ void cov_predict_batch_dt(const MatrixView& Fv,
         mkl_free(A_array); mkl_free(B_array); mkl_free(C_array);
     }
 
-    // P = FP * F^T (batched)
+    // (2) P = FP * Fᵀ (batched pointer arrays)
     {
         const MKL_INT group_count = 1;
         MKL_INT m_arr[1]   = { n }, n_arr[1] = { n }, k_arr[1] = { n };
@@ -171,14 +228,14 @@ void cov_predict_batch_dt(const MatrixView& Fv,
         double alpha_arr[1] = { 1.0 }, beta_arr[1] = { 0.0 };
         MKL_INT group_size[1] = { (MKL_INT)Pbatch.count };
 
-        const double** A_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
-        const double** B_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
-        double**       C_array = (double**)      mkl_malloc(sizeof(double*)*Pbatch.count,64);
+        const double** A_array = (const double**)mkl_malloc(sizeof(double*) * Pbatch.count, 64);
+        const double** B_array = (const double**)mkl_malloc(sizeof(double*) * Pbatch.count, 64);
+        double**       C_array = (double**)      mkl_malloc(sizeof(double*) * Pbatch.count, 64);
 
-        for (std::size_t i=0;i<Pbatch.count;++i) {
-            A_array[i] = FP           + i * mat_elems;
-            B_array[i] = Fv.ptr;
-            C_array[i] = Pbatch.base  + i * Pbatch.stride;
+        for (std::size_t i = 0; i < Pbatch.count; ++i) {
+            A_array[i] = FP           + i * mat_elems;        // FP_i
+            B_array[i] = Fv.ptr;                               // F
+            C_array[i] = Pbatch.base  + i * Pbatch.stride;     // P_i
         }
 
         cblas_dgemm_batch(CblasRowMajor,
@@ -194,33 +251,39 @@ void cov_predict_batch_dt(const MatrixView& Fv,
         mkl_free(A_array); mkl_free(B_array); mkl_free(C_array);
     }
 
-    // Add Qps*dt
+    // (3) Add Q_per_sec * dt
     const MKL_INT ldQ = (MKL_INT)Qps.stride;
-    for (std::size_t i=0;i<Pbatch.count;++i) {
+    for (std::size_t i = 0; i < Pbatch.count; ++i) {
         double* Pi = Pbatch.base + i * Pbatch.stride;
-        for (MKL_INT r=0;r<n;++r) {
+        for (MKL_INT r = 0; r < n; ++r) {
             double* prow = Pi + r * (MKL_INT)Pbatch.ld;
             const double* qrow = Qps.ptr + r * ldQ;
-            for (MKL_INT c=0;c<n;++c) prow[c] += qrow[c] * dt;
+            for (MKL_INT c = 0; c < n; ++c) prow[c] += qrow[c] * dt;
         }
     }
 
     mkl_free(FP);
 }
 
+/**
+ * @brief Numerically enforce symmetry for each covariance:
+ *        P_b ← 0.5 * (P_b + P_bᵀ)
+ *
+ * @note This mitigates floating-point asymmetry; it does not guarantee PSD.
+ */
 void symmetrize_batch(const BatchMat& Pbatch)
 {
     const std::size_t n = Pbatch.n;
-    for (std::size_t b=0;b<Pbatch.count;++b) {
+    for (std::size_t b = 0; b < Pbatch.count; ++b) {
         double* P = Pbatch.base + b * Pbatch.stride;
-        // only need to average upper/lower
-        for (std::size_t r=0;r<n;++r) {
-            for (std::size_t c=r+1;c<n;++c) {
-                const double a = P[r*Pbatch.ld + c];
-                const double bval = P[c*Pbatch.ld + r];
-                const double m = 0.5*(a + bval);
-                P[r*Pbatch.ld + c] = m;
-                P[c*Pbatch.ld + r] = m;
+        // Average upper/lower triangles (skip diagonal).
+        for (std::size_t r = 0; r < n; ++r) {
+            for (std::size_t c = r + 1; c < n; ++c) {
+                const double a = P[r * Pbatch.ld + c];
+                const double bval = P[c * Pbatch.ld + r];
+                const double m = 0.5 * (a + bval);
+                P[r * Pbatch.ld + c] = m;
+                P[c * Pbatch.ld + r] = m;
             }
         }
     }
