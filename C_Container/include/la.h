@@ -35,4 +35,24 @@ void cov_predict_batch(const MatrixView& F,
                        const MatrixView& Q,
                        const BatchMat&   Pbatch);
 
+// Random-walk, diagonal Q:    P_i <- P_i + (q_per_sec * dt) * I
+void cov_predict_rw_diag_dt(const BatchMat& Pbatch,
+                            double q_per_sec,
+                            double dt);
+         
+// Random-walk, full Q:        P_i <- P_i + (Q_per_sec * dt)
+void cov_predict_rw_fullQ_dt(const MatrixView& Q_per_sec,
+                             double dt,
+                             const BatchMat& Pbatch);
+
+// General Δt-scaled prediction:
+// P_i <- F P_i F^T + (Q_per_sec * dt)
+void cov_predict_batch_dt(const MatrixView& F,
+                          const MatrixView& Q_per_sec,
+                          double dt,
+                          const BatchMat& Pbatch);
+
+// Optional: numerically re-symmetrize P_i ← 0.5*(P_i + P_i^T)
+void symmetrize_batch(const BatchMat& Pbatch);
+         
 } // namespace la

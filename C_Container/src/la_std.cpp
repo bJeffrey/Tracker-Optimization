@@ -108,4 +108,74 @@ void cov_predict_batch(const MatrixView& Fv,
     delete [] FP;
 }
 
+void cov_predict_rw_diag_dt(const BatchMat& Pbatch,
+                            double q_per_sec,
+                            double dt)
+{
+    add_diag_noise_batch(Pbatch, q_per_sec*dt);
+}
+
+void cov_predict_rw_fullQ_dt(const MatrixView& Qps,
+                             double dt,
+                             const BatchMat& Pbatch)
+{
+    assert(Qps.rows==Qps.cols && Qps.rows==Pbatch.n);
+    const std::size_t n = Pbatch.n;
+    for (std::size_t b=0;b<Pbatch.count;++b) {
+        double* P = Pbatch.base + b * Pbatch.stride;
+        for (std::size_t r=0;r<n;++r) {
+            double* prow = P + r*Pbatch.ld;
+            const double* qrow = Qps.ptr + r*Qps.stride;
+            for (std::size_t c=0;c<n;++c)
+                prow[c] += qrow[c] * dt;
+        }
+    }
+}
+
+void cov_predict_batch_dt(const MatrixView& Fv,
+                          const MatrixView& Qps,
+                          double dt,
+                          const BatchMat& Pbatch)
+{
+    const std::size_t n = Pbatch.n;
+    double* FP = new double[n*n];
+    for (std::size_t b=0;b<Pbatch.count;++b) {
+        double* Pptr = Pbatch.base + b*Pbatch.stride;
+
+        MatrixView A=Fv, B, C;
+        B.ptr=Pptr; B.rows=n; B.cols=n; B.stride=Pbatch.ld;
+        C.ptr=FP;   C.rows=n; C.cols=n; C.stride=n;
+        gemm(false,false,1.0, A,B, 0.0, C);
+
+        MatrixView A2; A2.ptr=FP;   A2.rows=n; A2.cols=n; A2.stride=n;
+        MatrixView B2=Fv;
+        MatrixView C2; C2.ptr=Pptr; C2.rows=n; C2.cols=n; C2.stride=Pbatch.ld;
+        gemm(false,true,1.0, A2,B2, 0.0, C2);
+
+        for (std::size_t r=0;r<n;++r) {
+            double* prow = Pptr + r*Pbatch.ld;
+            const double* qrow = Qps.ptr + r*Qps.stride;
+            for (std::size_t c=0;c<n;++c) prow[c] += qrow[c] * dt;
+        }
+    }
+    delete [] FP;
+}
+
+void symmetrize_batch(const BatchMat& Pbatch)
+{
+    const std::size_t n = Pbatch.n;
+    for (std::size_t b=0;b<Pbatch.count;++b) {
+        double* P = Pbatch.base + b*Pbatch.stride;
+        for (std::size_t r=0;r<n;++r) {
+            for (std::size_t c=r+1;c<n;++c) {
+                const double a = P[r*Pbatch.ld + c];
+                const double bt= P[c*Pbatch.ld + r];
+                const double m = 0.5*(a+bt);
+                P[r*Pbatch.ld + c] = m;
+                P[c*Pbatch.ld + r] = m;
+            }
+        }
+    }
+}
+
 } // namespace la

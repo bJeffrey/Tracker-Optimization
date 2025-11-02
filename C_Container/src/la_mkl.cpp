@@ -89,4 +89,141 @@ void cov_predict_batch(const MatrixView& Fv,
     mkl_free(FP);
 }
 
+void cov_predict_rw_diag_dt(const BatchMat& Pbatch,
+                            double q_per_sec,
+                            double dt)
+{
+    add_diag_noise_batch(Pbatch, q_per_sec * dt);
+}
+
+void cov_predict_rw_fullQ_dt(const MatrixView& Qps,
+                             double dt,
+                             const BatchMat& Pbatch)
+{
+    assert(Qps.rows==Qps.cols && Qps.rows==Pbatch.n);
+    const MKL_INT n   = (MKL_INT)Pbatch.n;
+    const MKL_INT ldQ = (MKL_INT)Qps.stride;
+
+    for (std::size_t i=0;i<Pbatch.count;++i) {
+        double* Pi = Pbatch.base + i * Pbatch.stride;
+        for (MKL_INT r=0;r<n;++r) {
+            double* prow = Pi + r * (MKL_INT)Pbatch.ld;
+            const double* qrow = Qps.ptr + r * ldQ;
+            for (MKL_INT c=0;c<n;++c) prow[c] += qrow[c] * dt;
+        }
+    }
+}
+
+void cov_predict_batch_dt(const MatrixView& Fv,
+                          const MatrixView& Qps,
+                          double dt,
+                          const BatchMat& Pbatch)
+{
+    // same as cov_predict_batch, but add Qps*dt
+    assert(Fv.rows==Fv.cols && Qps.rows==Qps.cols && Fv.rows==Qps.rows && Pbatch.n==Fv.rows);
+
+    const MKL_INT n   = (MKL_INT)Fv.rows;
+    const MKL_INT ldF = (MKL_INT)Fv.stride;
+    const MKL_INT ldP = (MKL_INT)Pbatch.ld;
+
+    const std::size_t mat_elems = (std::size_t)Pbatch.n * (std::size_t)Pbatch.n;
+    double* FP = (double*)mkl_malloc(sizeof(double) * mat_elems * Pbatch.count, 64);
+    if (!FP) return;
+
+    // FP = F * P (batched)
+    {
+        const MKL_INT group_count = 1;
+        MKL_INT m_arr[1]   = { n }, n_arr[1] = { n }, k_arr[1] = { n };
+        MKL_INT lda_arr[1] = { ldF }, ldb_arr[1] = { ldP }, ldc_arr[1] = { (MKL_INT)Pbatch.n };
+        CBLAS_TRANSPOSE ta_arr[1] = { CblasNoTrans }, tb_arr[1] = { CblasNoTrans };
+        double alpha_arr[1] = { 1.0 }, beta_arr[1] = { 0.0 };
+        MKL_INT group_size[1] = { (MKL_INT)Pbatch.count };
+
+        const double** A_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
+        const double** B_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
+        double**       C_array = (double**)      mkl_malloc(sizeof(double*)*Pbatch.count,64);
+
+        for (std::size_t i=0;i<Pbatch.count;++i) {
+            A_array[i] = Fv.ptr;
+            B_array[i] = Pbatch.base + i * Pbatch.stride;
+            C_array[i] = FP           + i * mat_elems;
+        }
+
+        cblas_dgemm_batch(CblasRowMajor,
+                          ta_arr, tb_arr,
+                          m_arr, n_arr, k_arr,
+                          alpha_arr,
+                          A_array, lda_arr,
+                          B_array, ldb_arr,
+                          beta_arr,
+                          C_array, ldc_arr,
+                          group_count, group_size);
+
+        mkl_free(A_array); mkl_free(B_array); mkl_free(C_array);
+    }
+
+    // P = FP * F^T (batched)
+    {
+        const MKL_INT group_count = 1;
+        MKL_INT m_arr[1]   = { n }, n_arr[1] = { n }, k_arr[1] = { n };
+        MKL_INT lda_arr[1] = { (MKL_INT)Pbatch.n }, ldb_arr[1] = { ldF }, ldc_arr[1] = { ldP };
+        CBLAS_TRANSPOSE ta_arr[1] = { CblasNoTrans }, tb_arr[1] = { CblasTrans };
+        double alpha_arr[1] = { 1.0 }, beta_arr[1] = { 0.0 };
+        MKL_INT group_size[1] = { (MKL_INT)Pbatch.count };
+
+        const double** A_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
+        const double** B_array = (const double**)mkl_malloc(sizeof(double*)*Pbatch.count,64);
+        double**       C_array = (double**)      mkl_malloc(sizeof(double*)*Pbatch.count,64);
+
+        for (std::size_t i=0;i<Pbatch.count;++i) {
+            A_array[i] = FP           + i * mat_elems;
+            B_array[i] = Fv.ptr;
+            C_array[i] = Pbatch.base  + i * Pbatch.stride;
+        }
+
+        cblas_dgemm_batch(CblasRowMajor,
+                          ta_arr, tb_arr,
+                          m_arr, n_arr, k_arr,
+                          alpha_arr,
+                          A_array, lda_arr,
+                          B_array, ldb_arr,
+                          beta_arr,
+                          C_array, ldc_arr,
+                          group_count, group_size);
+
+        mkl_free(A_array); mkl_free(B_array); mkl_free(C_array);
+    }
+
+    // Add Qps*dt
+    const MKL_INT ldQ = (MKL_INT)Qps.stride;
+    for (std::size_t i=0;i<Pbatch.count;++i) {
+        double* Pi = Pbatch.base + i * Pbatch.stride;
+        for (MKL_INT r=0;r<n;++r) {
+            double* prow = Pi + r * (MKL_INT)Pbatch.ld;
+            const double* qrow = Qps.ptr + r * ldQ;
+            for (MKL_INT c=0;c<n;++c) prow[c] += qrow[c] * dt;
+        }
+    }
+
+    mkl_free(FP);
+}
+
+void symmetrize_batch(const BatchMat& Pbatch)
+{
+    const std::size_t n = Pbatch.n;
+    for (std::size_t b=0;b<Pbatch.count;++b) {
+        double* P = Pbatch.base + b * Pbatch.stride;
+        // only need to average upper/lower
+        for (std::size_t r=0;r<n;++r) {
+            for (std::size_t c=r+1;c<n;++c) {
+                const double a = P[r*Pbatch.ld + c];
+                const double bval = P[c*Pbatch.ld + r];
+                const double m = 0.5*(a + bval);
+                P[r*Pbatch.ld + c] = m;
+                P[c*Pbatch.ld + r] = m;
+            }
+        }
+    }
+}
+
 } // namespace la
