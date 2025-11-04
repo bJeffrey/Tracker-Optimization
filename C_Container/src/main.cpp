@@ -15,7 +15,6 @@
  *   Notes:
  *    - Row-major layout is assumed (ld = n, stride = n*n).
  *    - The “fast stationary” path avoids F P Fᵀ when F = I.
- *    - All code is C++98-compatible.
  */
 
 #include "la.h"
