@@ -16,7 +16,9 @@
  *   Notes:
  *     - Uses cblas_dgemm_batch_strided where available (one F reused across batch).
  *     - Falls back to cblas_dgemm_batch in cov_predict_batch_dt for portability.
- *     - All code is C++98 compatible: no auto, nullptr, range-for, etc.
+ *     - OpenMP is applied to outer batch loops where appropriate. The large
+ *       MKL batched GEMM calls remain single calls for efficiency; control
+ *       MKL/Eigen threading at runtime (e.g., MKL_NUM_THREADS=1) to avoid oversubscription.
  */
 
 #include "la.h"
@@ -61,8 +63,9 @@ void gemm(bool tA, bool tB, double alpha,
  */
 void add_diag_noise_batch(const BatchMat& Pbatch, double q)
 {
-    for (std::size_t b = 0; b < Pbatch.count; ++b) {
-        double* P = Pbatch.base + b * Pbatch.stride;
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* P = Pbatch.base + (std::size_t)b * Pbatch.stride;
         for (std::size_t i = 0; i < Pbatch.n; ++i)
             P[i * Pbatch.ld + i] += q;
     }
@@ -117,12 +120,13 @@ void cov_predict_batch(const MatrixView& Fv,
         Pbatch.base, (MKL_INT)Pbatch.ld, (MKL_INT)Pbatch.stride,
         batch);
 
-    // (3) P_b += Q   (tiny n → simple loop is fine)
-    for (std::size_t b = 0; b < Pbatch.count; ++b) {
-        double* Pi = Pbatch.base + b * Pbatch.stride;
+    // (3) P_b += Q   (parallelize across b)
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* Pi = Pbatch.base + (std::size_t)b * Pbatch.stride;
         for (MKL_INT r = 0; r < n; ++r) {
             const double* qrow = Qv.ptr + r * (MKL_INT)Qv.stride;
-            double* prow = Pi + r * (MKL_INT)Pbatch.ld;
+            double*       prow = Pi    + r * (MKL_INT)Pbatch.ld;
             for (MKL_INT c = 0; c < n; ++c)
                 prow[c] += qrow[c];
         }
@@ -154,10 +158,11 @@ void cov_predict_rw_fullQ_dt(const MatrixView& Qps,
     const MKL_INT n   = (MKL_INT)Pbatch.n;
     const MKL_INT ldQ = (MKL_INT)Qps.stride;
 
-    for (std::size_t i = 0; i < Pbatch.count; ++i) {
-        double* Pi = Pbatch.base + i * Pbatch.stride;
+    #pragma omp parallel for schedule(static)
+    for (long long i = 0; i < (long long)Pbatch.count; ++i) {
+        double* Pi = Pbatch.base + (std::size_t)i * Pbatch.stride;
         for (MKL_INT r = 0; r < n; ++r) {
-            double* prow = Pi + r * (MKL_INT)Pbatch.ld;
+            double*       prow = Pi      + r * (MKL_INT)Pbatch.ld;
             const double* qrow = Qps.ptr + r * ldQ;
             for (MKL_INT c = 0; c < n; ++c) prow[c] += qrow[c] * dt;
         }
@@ -253,10 +258,11 @@ void cov_predict_batch_dt(const MatrixView& Fv,
 
     // (3) Add Q_per_sec * dt
     const MKL_INT ldQ = (MKL_INT)Qps.stride;
-    for (std::size_t i = 0; i < Pbatch.count; ++i) {
-        double* Pi = Pbatch.base + i * Pbatch.stride;
+    #pragma omp parallel for schedule(static)
+    for (long long i = 0; i < (long long)Pbatch.count; ++i) {
+        double* Pi = Pbatch.base + (std::size_t)i * Pbatch.stride;
         for (MKL_INT r = 0; r < n; ++r) {
-            double* prow = Pi + r * (MKL_INT)Pbatch.ld;
+            double*       prow = Pi      + r * (MKL_INT)Pbatch.ld;
             const double* qrow = Qps.ptr + r * ldQ;
             for (MKL_INT c = 0; c < n; ++c) prow[c] += qrow[c] * dt;
         }
@@ -274,14 +280,14 @@ void cov_predict_batch_dt(const MatrixView& Fv,
 void symmetrize_batch(const BatchMat& Pbatch)
 {
     const std::size_t n = Pbatch.n;
-    for (std::size_t b = 0; b < Pbatch.count; ++b) {
-        double* P = Pbatch.base + b * Pbatch.stride;
-        // Average upper/lower triangles (skip diagonal).
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* P = Pbatch.base + (std::size_t)b * Pbatch.stride;
         for (std::size_t r = 0; r < n; ++r) {
             for (std::size_t c = r + 1; c < n; ++c) {
-                const double a = P[r * Pbatch.ld + c];
+                const double a    = P[r * Pbatch.ld + c];
                 const double bval = P[c * Pbatch.ld + r];
-                const double m = 0.5 * (a + bval);
+                const double m    = 0.5 * (a + bval);
                 P[r * Pbatch.ld + c] = m;
                 P[c * Pbatch.ld + r] = m;
             }

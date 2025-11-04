@@ -5,7 +5,7 @@ FROM quay.io/centos/centos:stream9
 ENV LANG=C.UTF-8
 WORKDIR /src
 
-# Enable CRB and install base toolchain + utilities
+# Enable CRB and install base toolchain + utilities + OpenMP runtime
 RUN dnf -y install dnf-plugins-core && \
     dnf -y config-manager --set-enabled crb && \
     dnf -y install \
@@ -13,8 +13,9 @@ RUN dnf -y install dnf-plugins-core && \
         cmake ninja-build \
         doxygen graphviz \
         pkgconf-pkg-config \
-        curl-minimal ca-certificates && \
-    dnf clean all
+        curl-minimal ca-certificates \
+        libgomp \
+    && dnf clean all
 
 # Intel oneAPI MKL YUM repo (EL9) with correct GPG key location
 RUN printf '%s\n' \
@@ -35,17 +36,26 @@ RUN printf '%s\n' \
 ENV MKLROOT=/opt/intel/oneapi/mkl/latest
 # Add MKL & (if present) compiler runtimes to the loader path
 ENV LD_LIBRARY_PATH=$MKLROOT/lib/intel64:/opt/intel/oneapi/compiler/latest/linux/lib:$LD_LIBRARY_PATH
-# Help CMake find MKLConfig.cmake
-ENV CMAKE_PREFIX_PATH=$MKLROOT/lib/cmake${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}
+# Help CMake find MKLConfig.cmake (note the /mkl suffix)
+ENV CMAKE_PREFIX_PATH=$MKLROOT/lib/cmake/mkl${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}
+
+# Threading policy:
+# - Use GCC's OpenMP runtime with MKL (avoids mismatch with Intel iomp)
+# - Keep MKL single-threaded by default; let outer OpenMP (your batch loops) drive parallelism
+ENV MKL_THREADING_LAYER=GNU
+ENV MKL_NUM_THREADS=1
+# You control outer threads at run time with OMP_NUM_THREADS
+# e.g.: docker run --rm -e OMP_NUM_THREADS=8 la-demo:mkl
 
 # Copy sources
 COPY . /src
 
-# Build (MKL backend), C++17, Release
+# Build (MKL backend), C++17, Release, OpenMP enabled
 RUN cmake -S . -B /build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_STANDARD=17 \
-      -DUSE_MKL=ON -DUSE_STD=OFF && \
+      -DUSE_MKL=ON -DUSE_STD=OFF \
+      -DENABLE_OPENMP=ON && \
     cmake --build /build -j
 
 # Generate Doxygen docs to /src/docs/html

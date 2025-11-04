@@ -5,7 +5,7 @@ FROM quay.io/centos/centos:stream9
 ENV LANG=C.UTF-8
 WORKDIR /src
 
-# Enable CRB and EPEL/EPEL-Next, then install toolchain + deps
+# Enable CRB and EPEL/EPEL-Next, then install toolchain + deps (incl. OpenMP runtime)
 RUN dnf -y install dnf-plugins-core && \
     dnf -y config-manager --set-enabled crb && \
     dnf -y install epel-release epel-next-release && \
@@ -14,18 +14,20 @@ RUN dnf -y install dnf-plugins-core && \
         cmake ninja-build \
         eigen3-devel \
         doxygen graphviz \
-        pkgconfig && \
-    dnf clean all
+        pkgconfig \
+        libgomp \
+    && dnf clean all
 
 # Copy project sources
 COPY . /src
 
-# Build (Eigen backend), C++17, Release
+# Build (Eigen backend), C++17, Release, OpenMP enabled
 RUN cmake -S . -B /build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_STANDARD=17 \
-      -DUSE_STD=OFF -DUSE_MKL=OFF && \
-    cmake --build /build -j
+      -DUSE_STD=OFF -DUSE_MKL=OFF \
+      -DENABLE_OPENMP=ON \
+    && cmake --build /build -j
 
 # Generate Doxygen docs to /src/docs/html
 RUN doxygen -g /src/Doxyfile && \
@@ -37,5 +39,6 @@ RUN doxygen -g /src/Doxyfile && \
     sed -i 's|^DOT_IMAGE_FORMAT.*|DOT_IMAGE_FORMAT = svg|' /src/Doxyfile && \
     doxygen /src/Doxyfile
 
-# Run the demo by default
+# Tip: control outer batch parallelism at runtime (avoid oversubscription)
+# e.g. docker run --rm -e OMP_NUM_THREADS=8 la-demo:eigen
 ENTRYPOINT ["/build/demo"]

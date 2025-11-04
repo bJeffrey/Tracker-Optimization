@@ -1,6 +1,6 @@
 /**
  * @file la_std.cpp
- * @brief Baseline C++98 backend (no external libs) for linear algebra.
+ * @brief Baseline C++ backend (no external libs) for linear algebra.
  *
  * @details
  *   Reference implementation of the la.h API using straightforward
@@ -12,6 +12,11 @@
  *     - MatrixView::stride and BatchMat::ld are leading dimensions (elements).
  *     - BatchMat::stride is the element distance between consecutive n×n blocks.
  *     - Batch ops treat each covariance independently (no cross-covariances).
+ *
+ *   Parallelization:
+ *     - If built with ENABLE_OPENMP and OpenMP is available, outer loops over
+ *       the batch (Pbatch.count) are parallelized with #pragma omp parallel for.
+ *       Each iteration uses its own scratch buffer to avoid data races.
  */
 
 #include "la.h"
@@ -91,8 +96,10 @@ void gemm(bool tA, bool tB, double alpha,
  */
 void add_diag_noise_batch(const BatchMat& Pbatch, double q)
 {
-    for (std::size_t b = 0; b < Pbatch.count; ++b) {
-        double* P = Pbatch.base + b * Pbatch.stride;
+    // Parallelize across matrices in the batch.
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* P = Pbatch.base + (std::size_t)b * Pbatch.stride;
         for (std::size_t i = 0; i < Pbatch.n; ++i) {
             P[i * Pbatch.ld + i] += q;
         }
@@ -107,7 +114,7 @@ void add_diag_noise_batch(const BatchMat& Pbatch, double q)
  * @param Qv     Shared process noise (n×n, absolute).
  * @param Pbatch Batch of covariances (updated in place).
  *
- * @note Uses a single n×n scratch (FP) reused per matrix for simplicity.
+ * @note Scratch buffer (FP) is thread-local when OpenMP is enabled.
  */
 void cov_predict_batch(const MatrixView& Fv,
                        const MatrixView& Qv,
@@ -120,14 +127,16 @@ void cov_predict_batch(const MatrixView& Fv,
 
     const std::size_t n = Pbatch.n;
 
-    // Workspace for FP per track (tight n×n); reused inside loop.
-    double* FP = new double[n * n];
-
     MatrixView F = Fv;
     MatrixView Q = Qv;
 
-    for (std::size_t b = 0; b < Pbatch.count; ++b) {
-        double* Pptr = Pbatch.base + b * Pbatch.stride;
+    // Parallelize across matrices; allocate FP per-iteration to avoid races.
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* Pptr = Pbatch.base + (std::size_t)b * Pbatch.stride;
+
+        // Thread-local scratch
+        double* FP = new double[n * n];
 
         // FP = F * P
         {
@@ -153,9 +162,9 @@ void cov_predict_batch(const MatrixView& Fv,
                 prow[c] += qrow[c];
             }
         }
-    }
 
-    delete [] FP;
+        delete [] FP;
+    }
 }
 
 /**
@@ -179,8 +188,10 @@ void cov_predict_rw_fullQ_dt(const MatrixView& Qps,
 {
     assert(Qps.rows==Qps.cols && Qps.rows==Pbatch.n);
     const std::size_t n = Pbatch.n;
-    for (std::size_t b=0; b<Pbatch.count; ++b) {
-        double* P = Pbatch.base + b * Pbatch.stride;
+
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* P = Pbatch.base + (std::size_t)b * Pbatch.stride;
         for (std::size_t r=0; r<n; ++r) {
             double* prow = P + r*Pbatch.ld;
             const double* qrow = Qps.ptr + r*Qps.stride;
@@ -200,10 +211,13 @@ void cov_predict_batch_dt(const MatrixView& Fv,
                           const BatchMat& Pbatch)
 {
     const std::size_t n = Pbatch.n;
-    double* FP = new double[n*n];
 
-    for (std::size_t b=0; b<Pbatch.count; ++b) {
-        double* Pptr = Pbatch.base + b*Pbatch.stride;
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* Pptr = Pbatch.base + (std::size_t)b * Pbatch.stride;
+
+        // Thread-local scratch
+        double* FP = new double[n*n];
 
         // FP = F * P
         MatrixView A=Fv, B, C;
@@ -223,8 +237,9 @@ void cov_predict_batch_dt(const MatrixView& Fv,
             const double* qrow = Qps.ptr + r*Qps.stride;
             for (std::size_t c=0; c<n; ++c) prow[c] += qrow[c] * dt;
         }
+
+        delete [] FP;
     }
-    delete [] FP;
 }
 
 /**
@@ -236,8 +251,10 @@ void cov_predict_batch_dt(const MatrixView& Fv,
 void symmetrize_batch(const BatchMat& Pbatch)
 {
     const std::size_t n = Pbatch.n;
-    for (std::size_t b=0; b<Pbatch.count; ++b) {
-        double* P = Pbatch.base + b*Pbatch.stride;
+
+    #pragma omp parallel for schedule(static)
+    for (long long b = 0; b < (long long)Pbatch.count; ++b) {
+        double* P = Pbatch.base + (std::size_t)b * Pbatch.stride;
         for (std::size_t r=0; r<n; ++r) {
             for (std::size_t c=r+1; c<n; ++c) {
                 const double a  = P[r*Pbatch.ld + c];
