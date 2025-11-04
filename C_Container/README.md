@@ -1,41 +1,45 @@
-# Linear Algebra Abstraction Framework (Offline-Ready)
+# Linear Algebra Abstraction Framework (CentOS 9 + C++17 Ready)
 
-This repository demonstrates an extensible C++98 linear algebra abstraction framework that can switch seamlessly between **Eigen**, **Intel MKL**, and **pure standard C++98** (no dependencies).  
-It also supports **offline builds** via prebuilt toolchain base images (`devbase` concept).
-
----
-
-## 🧱 Repository Overview
-
-| Backend | Library Used | Purpose | Build Option |
-|----------|---------------|----------|---------------|
-| **Eigen** | Eigen3 | Portable high-performance default | `-DUSE_MKL=OFF -DUSE_STD=OFF` |
-| **MKL** | Intel MKL | Optimized for Intel CPUs | `-DUSE_MKL=ON` |
-| **STD** | None (C++98 only) | Baseline reference; offline safe | `-DUSE_STD=ON` |
-
-All backends share the same API, with batch processing support for updating multiple tracks (e.g., radar track covariances) simultaneously.
+This repository provides a modular, offline-ready C++ linear algebra abstraction framework
+with interchangeable backends (**Eigen**, **Intel MKL**, **Standard C++**) unified under a
+single API. It now targets **CentOS Stream 9 (RHEL 9–compatible)** and **C++17** for modern
+toolchains while retaining full offline portability.
 
 ---
 
-## 🧩 Directory Layout
+## 🧱 Overview
+
+| Backend | Library | Highlights | Build Flags |
+|----------|----------|-------------|--------------|
+| **Eigen** | Eigen3 | Portable, high‑performance default with OpenMP | `-DUSE_MKL=OFF -DUSE_STD=OFF` |
+| **MKL** | Intel oneAPI MKL | Optimized for Intel CPUs, fastest for large matrices | `-DUSE_MKL=ON` |
+| **STD** | None | Pure C++17 reference; minimal dependencies | `-DUSE_STD=ON` |
+
+Each backend implements the same batch‑covariance API, enabling consistent benchmarking or
+deployment on systems with or without external libraries.
+
+---
+
+## 🗂 Directory Layout
 
 ```
 include/
-  la.h                # Common interface
+  la.h                # Common API definitions
 src/
-  la_eigen.cpp        # Eigen backend
-  la_mkl.cpp          # Intel MKL backend
-  la_std.cpp          # Pure C++98 backend
-  main.cpp            # Demo driver + timing example
-CMakeLists.txt        # Unified build configuration
-Dockerfile variants   # Offline + online build targets
+  la_eigen.cpp        # Eigen backend (OpenMP supported)
+  la_mkl.cpp          # Intel MKL backend (oneAPI EL9 RPMs)
+  la_std.cpp          # Standard C++17 baseline backend
+  main.cpp            # Demo driver
+CMakeLists.txt        # Unified build configuration (C++17)
+build.sh              # Smart build selector (Eigen/MKL/STD, auto CPU detect)
+app-*.Dockerfile      # CentOS Stream 9 container builds
 ```
 
 ---
 
 ## 🚀 Build Options
 
-### Online Builds
+### 🔧 Using Docker
 
 #### Eigen (default)
 ```bash
@@ -57,68 +61,23 @@ docker run --rm la-demo:std
 
 ---
 
-## 📴 Offline Workflow
+### 🧰 Building Directly (RHEL 9 / CentOS 9)
 
-### 1️⃣ Build Base Image Online
-
-**devbase-std.Dockerfile**
-```dockerfile
-FROM ubuntu:22.04
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake ninja-build pkg-config ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-```
-
-Build & export it once (online):
-```bash
-docker build -t devbase:std -f devbase-std.Dockerfile .
-docker save -o devbase-std.tar devbase:std
-# Optional: docker save -o ubuntu-22.04.tar ubuntu:22.04
-```
-
-Copy the following to your offline system:
-- `devbase-std.tar`
-- (optional) `ubuntu-22.04.tar`
-- This project directory
-
----
-
-### 2️⃣ Load Base Image Offline
+The helper script automatically detects CPU vendor and selects a backend:
 
 ```bash
-docker load -i devbase-std.tar
-# Optional: docker load -i ubuntu-22.04.tar
+./build.sh --backend auto        # detect Intel → MKL, else Eigen
+./build.sh --backend eigen       # force Eigen
+./build.sh --backend mkl         # force MKL
+./build.sh --backend std         # force STD backend
+./build.sh --clean               # clean build directory
 ```
 
-Verify:
+To run after build:
+
 ```bash
-docker images | grep devbase
-```
-
----
-
-### 3️⃣ Build App Offline
-
-**app-std.Dockerfile**
-```dockerfile
-FROM devbase:std
-WORKDIR /src
-COPY . /src
-RUN cmake -S . -B /build -G Ninja \
-      -DUSE_STD=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=98 && \
-    cmake --build /build -j
-ENTRYPOINT ["/build/demo"]
-```
-
-Build it offline:
-```bash
-docker build -t la-demo:std -f app-std.Dockerfile .
-```
-
-Run:
-```bash
-docker run --rm la-demo:std
+cd build
+./demo
 ```
 
 ---
@@ -126,38 +85,36 @@ docker run --rm la-demo:std
 ## 🧮 Example Output
 
 ```
-Initializing 1000 tracks...
-Batch update wall time = 0.008765 s
-Checksum: 1.23456e+03
+Batch RW propagation time (dt=0.1): 0.0087 s, checksum 6026.27
 ```
 
 ---
 
 ## ⚙️ Thread Control
 
-| Backend | Variable | Example |
-|----------|-----------|----------|
-| **MKL** | `MKL_NUM_THREADS` | `docker run -e MKL_NUM_THREADS=4 la-demo:mkl` |
-| **Eigen (OpenMP)** | `OMP_NUM_THREADS` | `docker run -e OMP_NUM_THREADS=4 la-demo:eigen` |
-| **STD** | single-threaded | N/A |
+| Backend | Env Variable | Example |
+|----------|--------------|----------|
+| **MKL** | `MKL_NUM_THREADS` | `export MKL_NUM_THREADS=4` |
+| **Eigen** | `OMP_NUM_THREADS` | `export OMP_NUM_THREADS=4` |
+| **STD** | single‑threaded | N/A |
 
 ---
 
-## 🧠 Tips
+## 🧠 Notes
 
-- Always build with **`-DCMAKE_BUILD_TYPE=Release`** for accurate performance.
-- Small matrices (e.g., 6×6) may perform faster in Eigen or STD than MKL (overhead).
-- MKL shows its advantage for larger matrices and when multithreaded.
-- Add OpenMP later to parallelize Eigen or STD outer loops.
+- Use **`-DCMAKE_BUILD_TYPE=Release`** for performance comparisons.
+- Small matrices (6×6 typical for radar/ESM) may show similar timings across all backends.
+- MKL excels for larger batch sizes or high‑thread counts.
+- Eigen benefits from OpenMP and vectorization when enabled in CMake.
 
 ---
 
-## 🧩 Future Extensions
+## 🧩 Planned Enhancements
 
-- Add OpenMP or TBB parallelization for the outer batch loop.
-- Extend MKL path to handle variable-sized matrices per track.
-- Add timing utilities and CSV output for performance sweeps.
-- Integrate unit tests (GoogleTest or Catch2).
+- Extend Eigen/STD batch loops with OpenMP parallelization.
+- Add ESM‑inspired covariance models (frequency, drift, bias).
+- Generate performance metrics and plots automatically.
+- Add unit testing and continuous integration for each backend.
 
 ---
 
