@@ -1,21 +1,29 @@
 # syntax=docker/dockerfile:1.6
 # CentOS Stream 9 (RHEL 9–compatible)
-FROM quay.io/centos/centos:stream9
+
+# From online only, no base image
+# FROM quay.io/centos/centos:stream9
+
+# From base image - offline enabled
+ARG BASE_IMAGE=quay.io/centos/centos:stream9   # default for online
+FROM ${BASE_IMAGE}
+
 
 ENV LANG=C.UTF-8
 WORKDIR /src
 
 # Enable CRB and install base toolchain + utilities + OpenMP runtime
-RUN dnf -y install dnf-plugins-core && \
-    dnf -y config-manager --set-enabled crb && \
-    dnf -y install \
-        gcc gcc-c++ make \
-        cmake ninja-build \
-        doxygen graphviz \
-        pkgconf-pkg-config \
-        curl-minimal ca-certificates \
-        libgomp \
-    && dnf clean all
+# dnf install not needed since we built an for offline use
+# RUN dnf -y install dnf-plugins-core && \
+#     dnf -y config-manager --set-enabled crb && \
+#     dnf -y install \
+#         gcc gcc-c++ make \
+#         cmake ninja-build \
+#         doxygen graphviz \
+#         pkgconf-pkg-config \
+#         curl-minimal ca-certificates \
+#         libgomp \
+#     && dnf clean all
 
 # Intel oneAPI MKL YUM repo (EL9) with correct GPG key location
 RUN printf '%s\n' \
