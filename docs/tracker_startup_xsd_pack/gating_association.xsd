@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="FineGateTypeEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="MAHALANOBIS"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="AssocMethodEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="GNN"/>
+      <xs:enumeration value="JPDA"/>
+      <xs:enumeration value="MHT"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="AssocSolverEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="HUNGARIAN"/>
+      <xs:enumeration value="AUCTION"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="CostMetricEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="NEG_LOG_LIKELIHOOD"/>
+      <xs:enumeration value="MAHALANOBIS"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="RangeWindowType">
+    <xs:sequence>
+      <xs:element name="Min" type="NonNegativeDecimal"/>
+      <xs:element name="Max" type="PositiveDecimal"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="CoarseGatingType">
+    <xs:sequence>
+      <xs:element name="UseScanVolume" type="BoolText"/>
+      <xs:element name="RangeWindowMeters" type="RangeWindowType"/>
+      <xs:element name="AzimuthWindowDeg" type="NonNegativeDecimal" minOccurs="0"/>
+      <xs:element name="ElevationWindowDeg" type="NonNegativeDecimal" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="FineGatingType">
+    <xs:sequence>
+      <xs:element name="Type" type="FineGateTypeEnum"/>
+      <xs:element name="GateThresholdChi2" type="PositiveDecimal"/>
+      <xs:element name="MaxPairsPerScan" type="PositiveInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="CostType">
+    <xs:sequence>
+      <xs:element name="Metric" type="CostMetricEnum"/>
+      <xs:element name="MissedDetectionCost" type="NonNegativeDecimal"/>
+      <xs:element name="FalseAlarmCost" type="NonNegativeDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="AssociationType">
+    <xs:sequence>
+      <xs:element name="Method" type="AssocMethodEnum"/>
+      <xs:element name="Solver" type="AssocSolverEnum"/>
+      <xs:element name="Cost" type="CostType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="GatingAssociation">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="CoarseGating" type="CoarseGatingType"/>
+        <xs:element name="FineGating" type="FineGatingType"/>
+        <xs:element name="Association" type="AssociationType"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

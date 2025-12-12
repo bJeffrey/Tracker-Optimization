@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Two-stage gating (coarse then fine) and association settings.
+-->
+<GatingAssociation version="1.0">
+
+  <CoarseGating>
+    <!-- Fast, non-statistical gates to prune candidates early -->
+    <UseScanVolume>true</UseScanVolume>
+    <RangeWindowMeters>
+      <Min>0</Min>
+      <Max>185200</Max>
+    </RangeWindowMeters>
+
+    <!-- Optional additional coarse windows (enable as needed) -->
+    <AzimuthWindowDeg>5.0</AzimuthWindowDeg>
+    <ElevationWindowDeg>5.0</ElevationWindowDeg>
+  </CoarseGating>
+
+  <FineGating>
+    <!-- Statistical gate -->
+    <Type>MAHALANOBIS</Type>
+    <!-- Typical thresholds depend on measurement dimension; configure per sensor/model. -->
+    <GateThresholdChi2>9.21</GateThresholdChi2> <!-- example for 2D @ 99% -->
+    <MaxPairsPerScan>250000</MaxPairsPerScan>
+  </FineGating>
+
+  <Association>
+    <Method>GNN</Method> <!-- GNN | JPDA | MHT (future) -->
+    <Solver>HUNGARIAN</Solver>
+    <Cost>
+      <Metric>NEG_LOG_LIKELIHOOD</Metric> <!-- or MAHALANOBIS -->
+      <MissedDetectionCost>50.0</MissedDetectionCost>
+      <FalseAlarmCost>50.0</FalseAlarmCost>
+    </Cost>
+  </Association>
+
+</GatingAssociation>

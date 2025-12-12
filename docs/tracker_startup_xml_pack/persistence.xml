@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Persistence configuration for recovery + indexed volume queries.
+-->
+<Persistence version="1.0">
+
+  <TrackStateStore>
+    <Backend>SQLITE</Backend> <!-- SQLITE | POSTGRES_POSTGIS -->
+    <Path>data/tracks_state.sqlite</Path>
+
+    <SQLite>
+      <JournalMode>WAL</JournalMode>
+      <Synchronous>NORMAL</Synchronous> <!-- NORMAL is typical; FULL for max integrity -->
+      <CacheSizeKiB>524288</CacheSizeKiB> <!-- 512 MiB -->
+    </SQLite>
+
+    <SpatialIndex>
+      <Type>RTREE</Type>
+      <Frame>ECEF</Frame>
+
+      <!-- Voxel/cell-based indexing reduces index update churn -->
+      <VoxelMeters>
+        <X>5000</X>
+        <Y>5000</Y>
+        <Z>2000</Z>
+      </VoxelMeters>
+
+      <!-- Prefilter query is typically an ECEF AABB around ownship -->
+      <QueryPrefilter>
+        <Type>AABB</Type>
+        <MarginMeters>2000</MarginMeters>
+      </QueryPrefilter>
+    </SpatialIndex>
+  </TrackStateStore>
+
+  <Snapshot>
+    <Enabled>true</Enabled>
+    <PeriodSeconds>2.0</PeriodSeconds>
+    <OutputPath>data/snapshots/</OutputPath>
+
+    <!-- What to include in snapshots -->
+    <Contents>
+      <IncludeState>true</IncludeState>
+      <IncludeCovariance>true</IncludeCovariance> <!-- set false if you want SA-only fast restore -->
+      <IncludeMetadata>true</IncludeMetadata>
+    </Contents>
+
+    <Compression>
+      <Enabled>true</Enabled>
+      <Codec>ZSTD</Codec>
+      <Level>3</Level>
+    </Compression>
+  </Snapshot>
+
+</Persistence>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tracker model settings. Canonical state is ECEF.
+-->
+<Tracker version="1.0">
+
+  <State>
+    <Frame>ECEF</Frame>
+    <Model>POS_VEL</Model> <!-- POS_VEL | POS_VEL_ACC | CUSTOM -->
+    <Dimension>6</Dimension>
+  </State>
+
+  <Prediction>
+    <ProcessModel>CONSTANT_VELOCITY</ProcessModel>
+    <DefaultDtSeconds>1.0</DefaultDtSeconds>
+    <!-- Process noise (example). Tune per mission and expected maneuvers. -->
+    <Q>
+      <SigmaAccelMetersPerSec2>2.0</SigmaAccelMetersPerSec2>
+    </Q>
+  </Prediction>
+
+  <Update>
+    <Filter>EKF</Filter> <!-- EKF | UKF | PF -->
+    <MeasurementModel>AER_FROM_ECEF</MeasurementModel>
+  </Update>
+
+  <TrackManagement>
+    <Initialization>
+      <!-- How new tracks are created from unassigned measurements -->
+      <EnableNewTrackCreation>true</EnableNewTrackCreation>
+      <MinMeasurementsToInitiate>2</MinMeasurementsToInitiate>
+      <InitiationWindowSeconds>3.0</InitiationWindowSeconds>
+    </Initialization>
+
+    <Confirmation>
+      <HitsToConfirm>3</HitsToConfirm>
+      <WindowScans>5</WindowScans>
+    </Confirmation>
+
+    <Coasting>
+      <MaxMissesBeforeDelete>8</MaxMissesBeforeDelete>
+      <CovarianceInflationPerMiss>1.15</CovarianceInflationPerMiss>
+    </Coasting>
+
+    <Scoring>
+      <EnableThreatScoring>true</EnableThreatScoring>
+      <ThreatScoreDecayPerSecond>0.01</ThreatScoreDecayPerSecond>
+    </Scoring>
+  </TrackManagement>
+
+</Tracker>

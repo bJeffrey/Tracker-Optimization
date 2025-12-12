@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="RuntimeModeType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="REALTIME"/>
+      <xs:enumeration value="PLAYBACK"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="RuntimeType">
+    <xs:sequence>
+      <xs:element name="Mode" type="RuntimeModeType"/>
+      <xs:element name="TimeZone" type="TimeZoneType"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ProfilesRefType">
+    <xs:sequence>
+      <xs:element name="ActiveProfile" type="NonEmptyString"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="IncludesType">
+    <xs:sequence>
+      <xs:element name="File" type="NonEmptyString" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="SystemConfig">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Runtime" type="RuntimeType"/>
+        <xs:element name="Profiles" type="ProfilesRefType"/>
+        <xs:element name="Includes" type="IncludesType"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

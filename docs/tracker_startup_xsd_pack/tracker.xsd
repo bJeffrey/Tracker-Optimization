@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="StateModelEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="POS_VEL"/>
+      <xs:enumeration value="POS_VEL_ACC"/>
+      <xs:enumeration value="CUSTOM"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ProcessModelEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="CONSTANT_VELOCITY"/>
+      <xs:enumeration value="CONSTANT_ACCELERATION"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="FilterEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="EKF"/>
+      <xs:enumeration value="UKF"/>
+      <xs:enumeration value="PF"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="MeasModelEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="AER_FROM_ECEF"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="StateType">
+    <xs:sequence>
+      <xs:element name="Frame" type="NonEmptyString"/>
+      <xs:element name="Model" type="StateModelEnum"/>
+      <xs:element name="Dimension" type="PositiveInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="QType">
+    <xs:sequence>
+      <xs:element name="SigmaAccelMetersPerSec2" type="NonNegativeDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="PredictionType">
+    <xs:sequence>
+      <xs:element name="ProcessModel" type="ProcessModelEnum"/>
+      <xs:element name="DefaultDtSeconds" type="PositiveDecimal"/>
+      <xs:element name="Q" type="QType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="UpdateType">
+    <xs:sequence>
+      <xs:element name="Filter" type="FilterEnum"/>
+      <xs:element name="MeasurementModel" type="MeasModelEnum"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="InitializationType">
+    <xs:sequence>
+      <xs:element name="EnableNewTrackCreation" type="BoolText"/>
+      <xs:element name="MinMeasurementsToInitiate" type="PositiveInt"/>
+      <xs:element name="InitiationWindowSeconds" type="PositiveDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ConfirmationType">
+    <xs:sequence>
+      <xs:element name="HitsToConfirm" type="PositiveInt"/>
+      <xs:element name="WindowScans" type="PositiveInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="CoastingType">
+    <xs:sequence>
+      <xs:element name="MaxMissesBeforeDelete" type="PositiveInt"/>
+      <xs:element name="CovarianceInflationPerMiss" type="PositiveDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ScoringType">
+    <xs:sequence>
+      <xs:element name="EnableThreatScoring" type="BoolText"/>
+      <xs:element name="ThreatScoreDecayPerSecond" type="NonNegativeDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="TrackManagementType">
+    <xs:sequence>
+      <xs:element name="Initialization" type="InitializationType"/>
+      <xs:element name="Confirmation" type="ConfirmationType"/>
+      <xs:element name="Coasting" type="CoastingType"/>
+      <xs:element name="Scoring" type="ScoringType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="Tracker">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="State" type="StateType"/>
+        <xs:element name="Prediction" type="PredictionType"/>
+        <xs:element name="Update" type="UpdateType"/>
+        <xs:element name="TrackManagement" type="TrackManagementType"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

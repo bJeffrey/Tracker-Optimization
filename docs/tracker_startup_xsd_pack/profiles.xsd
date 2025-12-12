@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:complexType name="WorkingSetType">
+    <xs:sequence>
+      <xs:element name="MaxCandidatesPerScan" type="PositiveInt"/>
+      <xs:element name="MaxGatedTracksPerScan" type="PositiveInt"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="BatchingType">
+    <xs:sequence>
+      <xs:element name="SoABatchSize" type="PositiveInt"/>
+      <xs:element name="DbCommitCadenceMs" type="PositiveInt"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ProfileType">
+    <xs:sequence>
+      <xs:element name="TargetUpdateRateHz" type="PositiveDecimal"/>
+      <xs:element name="NominalTrackCount" type="PositiveInt"/>
+      <xs:element name="TotalUpdatesPerSecond" type="PositiveInt"/>
+      <xs:element name="WorkingSet" type="WorkingSetType"/>
+      <xs:element name="Batching" type="BatchingType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+    <xs:attribute name="name" type="NonEmptyString" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="Profiles">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Profile" type="ProfileType" minOccurs="1" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

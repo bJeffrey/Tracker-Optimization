@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Matrix Optimization Tracker - System Startup Configuration
+  Purpose: top-level wiring and selection of profiles.
+-->
+<SystemConfig version="1.0">
+  <Runtime>
+    <!-- Real-time or Playback -->
+    <Mode>REALTIME</Mode> <!-- REALTIME | PLAYBACK -->
+    <TimeZone>UTC</TimeZone>
+  </Runtime>
+
+  <Profiles>
+    <!-- Choose one by name at startup (or override via CLI/env). -->
+    <ActiveProfile>OP_50K_1HZ</ActiveProfile>
+    <!-- OP_50K_1HZ: 50k tracks @ 1 Hz
+         OP_10K_5HZ: 10k tracks @ 5 Hz -->
+  </Profiles>
+
+  <Includes>
+    <File>profiles.xml</File>
+    <File>sensors.xml</File>
+    <File>tracker.xml</File>
+    <File>gating_association.xml</File>
+    <File>persistence.xml</File>
+    <File>recorder_playback.xml</File>
+    <File>telemetry_logging.xml</File>
+  </Includes>
+</SystemConfig>

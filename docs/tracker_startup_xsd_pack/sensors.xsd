@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="NavSourceType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="INERTIAL_GPS_FUSED"/>
+      <xs:enumeration value="GPS_ONLY"/>
+      <xs:enumeration value="INERTIAL_ONLY"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="FrameType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="ECEF"/>
+      <xs:enumeration value="ENU"/>
+      <xs:enumeration value="NED"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="OwnshipType">
+    <xs:sequence>
+      <xs:element name="NavSource" type="NavSourceType"/>
+      <xs:element name="Frame" type="FrameType"/>
+      <xs:element name="NavUpdateRateHz" type="PositiveDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="MeasurementsType">
+    <xs:sequence>
+      <xs:element name="ProvidesAzimuth" type="BoolText"/>
+      <xs:element name="ProvidesElevation" type="BoolText"/>
+      <xs:element name="ProvidesRange" type="BoolText"/>
+      <xs:element name="ProvidesDoppler" type="BoolText"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="AngleRangeType">
+    <xs:sequence>
+      <xs:element name="Min" type="xs:decimal"/>
+      <xs:element name="Max" type="xs:decimal"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:simpleType name="SchedulerTypeEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="PERIODIC"/>
+      <xs:enumeration value="EVENT_DRIVEN"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="TimestampPolicyEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="MEASUREMENT_TIME"/>
+      <xs:enumeration value="RECEIVE_TIME"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="SchedulerType">
+    <xs:sequence>
+      <xs:element name="Type" type="SchedulerTypeEnum"/>
+      <xs:element name="NominalScanRateHz" type="PositiveDecimal"/>
+      <xs:element name="TimestampPolicy" type="TimestampPolicyEnum"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ScanType">
+    <xs:sequence>
+      <xs:element name="MaxRangeMeters" type="PositiveDecimal"/>
+      <xs:element name="AzimuthDeg" type="AngleRangeType"/>
+      <xs:element name="ElevationDeg" type="AngleRangeType"/>
+      <xs:element name="Scheduler" type="SchedulerType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="NoiseModelType">
+    <xs:sequence>
+      <xs:element name="R_AzimuthRad" type="NonNegativeDecimal"/>
+      <xs:element name="R_ElevationRad" type="NonNegativeDecimal"/>
+      <xs:element name="R_RangeMeters" type="NonNegativeDecimal"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:simpleType name="SensorTypeEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="RADAR"/>
+      <xs:enumeration value="ESM"/>
+      <xs:enumeration value="EOIR"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="SensorType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="Measurements" type="MeasurementsType"/>
+      <xs:element name="Scan" type="ScanType"/>
+      <xs:element name="NoiseModel" type="NoiseModelType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="NonEmptyString" use="required"/>
+    <xs:attribute name="type" type="SensorTypeEnum" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="Sensors">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Ownship" type="OwnshipType"/>
+        <xs:element name="Sensor" type="SensorType" minOccurs="1" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

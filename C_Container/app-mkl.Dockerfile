@@ -14,16 +14,16 @@ WORKDIR /src
 
 # Enable CRB and install base toolchain + utilities + OpenMP runtime
 # dnf install not needed since we built an for offline use
-# RUN dnf -y install dnf-plugins-core && \
-#     dnf -y config-manager --set-enabled crb && \
-#     dnf -y install \
-#         gcc gcc-c++ make \
-#         cmake ninja-build \
-#         doxygen graphviz \
-#         pkgconf-pkg-config \
-#         curl-minimal ca-certificates \
-#         libgomp \
-#     && dnf clean all
+RUN dnf -y install dnf-plugins-core && \
+    dnf -y config-manager --set-enabled crb && \
+    dnf -y install \
+        gcc gcc-c++ make \
+        cmake ninja-build \
+        doxygen graphviz \
+        pkgconf-pkg-config \
+        curl-minimal ca-certificates \
+        libgomp \
+    && dnf clean all
 
 # Intel oneAPI MKL YUM repo (EL9) with correct GPG key location
 RUN printf '%s\n' \

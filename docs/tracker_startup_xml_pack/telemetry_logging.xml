@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Telemetry, health, and logging settings for profiling and compute-aware behavior.
+-->
+<TelemetryLogging version="1.0">
+
+  <Logging>
+    <Level>INFO</Level> <!-- TRACE | DEBUG | INFO | WARN | ERROR -->
+    <Sink>STDOUT</Sink> <!-- STDOUT | FILE -->
+    <FilePath>logs/tracker.log</FilePath>
+  </Logging>
+
+  <Telemetry>
+    <Enabled>true</Enabled>
+    <EmitRateHz>1</EmitRateHz>
+
+    <Metrics>
+      <Latency>true</Latency>
+      <CandidateCounts>true</CandidateCounts>
+      <HitMissRates>true</HitMissRates>
+      <DbCommitTime>true</DbCommitTime>
+      <AssociationStats>true</AssociationStats>
+    </Metrics>
+  </Telemetry>
+
+  <ComputeAwareDegradation>
+    <Enabled>true</Enabled>
+    <MaxEndToEndLatencyMs>800</MaxEndToEndLatencyMs>
+
+    <!-- If exceeded, apply these degradations in order -->
+    <Actions>
+      <Action>REDUCE_MAX_CANDIDATES</Action>
+      <Action>REDUCE_MAX_PAIRS</Action>
+      <Action>SKIP_FINE_GATING_LOW_PRIORITY</Action>
+    </Actions>
+  </ComputeAwareDegradation>
+
+</TelemetryLogging>

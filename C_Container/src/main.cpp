@@ -59,7 +59,7 @@ static double urand() {
  */
 int main() {
     std::size_t n = 6;           // state dimension per track
-    std::size_t tracks = 1000;   // number of tracks
+    std::size_t tracks = 100000;   // number of tracks
     double dt = 0.1;             // seconds between propagations
 
     // (1) Identity F (stationary ESM random-walk), kept as a general F for API parity

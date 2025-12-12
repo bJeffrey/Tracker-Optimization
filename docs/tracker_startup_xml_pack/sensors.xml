@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sensor characteristics and scan scheduling.
+  Note: AER is measurement-space only; tracks remain canonical in ECEF.
+-->
+<Sensors version="1.0">
+
+  <Ownship>
+    <NavSource>INERTIAL_GPS_FUSED</NavSource>
+    <Frame>ECEF</Frame>
+    <!-- How often ownship nav is latched for measurement-model evaluation. -->
+    <NavUpdateRateHz>50</NavUpdateRateHz>
+  </Ownship>
+
+  <Sensor id="RADAR_1" type="RADAR">
+    <Enabled>true</Enabled>
+
+    <Measurements>
+      <ProvidesAzimuth>true</ProvidesAzimuth>
+      <ProvidesElevation>true</ProvidesElevation>
+      <ProvidesRange>true</ProvidesRange>
+      <ProvidesDoppler>false</ProvidesDoppler>
+    </Measurements>
+
+    <Scan>
+      <!-- Define scan volume in AER; used only for coarse filtering. -->
+      <MaxRangeMeters>185200</MaxRangeMeters> <!-- ~100 nmi -->
+      <AzimuthDeg>
+        <Min>-60</Min>
+        <Max>60</Max>
+      </AzimuthDeg>
+      <ElevationDeg>
+        <Min>-10</Min>
+        <Max>30</Max>
+      </ElevationDeg>
+
+      <!-- Scheduler defines when scans occur and the measurement timestamp policy. -->
+      <Scheduler>
+        <Type>PERIODIC</Type> <!-- PERIODIC | EVENT_DRIVEN -->
+        <NominalScanRateHz>1.0</NominalScanRateHz> <!-- overridden by active profile if desired -->
+        <TimestampPolicy>MEASUREMENT_TIME</TimestampPolicy> <!-- MEASUREMENT_TIME | RECEIVE_TIME -->
+      </Scheduler>
+    </Scan>
+
+    <NoiseModel>
+      <!-- Simple example; replace with your sensor-driven model (range/SNR dependent). -->
+      <R_AzimuthRad>0.0005</R_AzimuthRad>
+      <R_ElevationRad>0.0005</R_ElevationRad>
+      <R_RangeMeters>15.0</R_RangeMeters>
+    </NoiseModel>
+  </Sensor>
+
+</Sensors>

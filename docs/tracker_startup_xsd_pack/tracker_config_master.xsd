@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Master schema that includes all module schemas.
+  Use this if you want one schema file available in your tooling.
+  Note: XSD validation is per-document; this master just centralizes includes.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+
+  <xs:include schemaLocation="common_types.xsd"/>
+  <xs:include schemaLocation="system.xsd"/>
+  <xs:include schemaLocation="profiles.xsd"/>
+  <xs:include schemaLocation="sensors.xsd"/>
+  <xs:include schemaLocation="tracker.xsd"/>
+  <xs:include schemaLocation="gating_association.xsd"/>
+  <xs:include schemaLocation="persistence.xsd"/>
+  <xs:include schemaLocation="recorder_playback.xsd"/>
+  <xs:include schemaLocation="telemetry_logging.xsd"/>
+
+</xs:schema>

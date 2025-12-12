@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="RecorderFormatEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="MCAP"/>
+      <xs:enumeration value="CUSTOM"/>
+      <xs:enumeration value="ROSBAG2"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="StreamsType">
+    <xs:sequence>
+      <xs:element name="RecordOwnshipNav" type="BoolText"/>
+      <xs:element name="RecordMeasurements" type="BoolText"/>
+      <xs:element name="RecordAssociations" type="BoolText"/>
+      <xs:element name="RecordTrackDeltas" type="BoolText"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="RotationType">
+    <xs:sequence>
+      <xs:element name="MaxFileSizeMB" type="PositiveInt"/>
+      <xs:element name="MaxFiles" type="PositiveInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="CompressionType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="Codec" type="NonEmptyString"/>
+      <xs:element name="Level" type="NonNegativeInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="RecorderType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="OutputPath" type="NonEmptyString"/>
+      <xs:element name="Format" type="RecorderFormatEnum"/>
+      <xs:element name="Streams" type="StreamsType"/>
+      <xs:element name="Rotation" type="RotationType" minOccurs="0"/>
+      <xs:element name="Compression" type="CompressionType" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="PlaybackType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="InputFile" type="NonEmptyString"/>
+      <xs:element name="Rate" type="NonNegativeDecimal"/>
+      <xs:element name="Deterministic" type="BoolText"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="RecorderPlayback">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Recorder" type="RecorderType"/>
+        <xs:element name="Playback" type="PlaybackType"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

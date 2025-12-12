@@ -12,15 +12,15 @@ WORKDIR /src
 
 # --- Base dev tools + OpenMP + Doxygen ---
 # dnf install not needed since we built an for offline use
-# RUN dnf -y install dnf-plugins-core && \
-#     dnf -y config-manager --set-enabled crb && \
-#     dnf -y install \
-#       gcc gcc-c++ make \
-#       cmake ninja-build \
-#       doxygen graphviz \
-#       pkgconfig \
-#       libgomp \
-#     && dnf clean all
+RUN dnf -y install dnf-plugins-core && \
+    dnf -y config-manager --set-enabled crb && \
+    dnf -y install \
+      gcc gcc-c++ make \
+      cmake ninja-build \
+      doxygen graphviz \
+      pkgconfig \
+      libgomp \
+    && dnf clean all
 
 # Copy sources
 COPY . /src

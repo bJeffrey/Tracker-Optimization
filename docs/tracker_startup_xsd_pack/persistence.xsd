@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="BackendEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="SQLITE"/>
+      <xs:enumeration value="POSTGRES_POSTGIS"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="JournalModeEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="WAL"/>
+      <xs:enumeration value="DELETE"/>
+      <xs:enumeration value="TRUNCATE"/>
+      <xs:enumeration value="PERSIST"/>
+      <xs:enumeration value="MEMORY"/>
+      <xs:enumeration value="OFF"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="SynchronousEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="OFF"/>
+      <xs:enumeration value="NORMAL"/>
+      <xs:enumeration value="FULL"/>
+      <xs:enumeration value="EXTRA"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="IndexTypeEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="RTREE"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="QueryPrefilterEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="AABB"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="VoxelType">
+    <xs:sequence>
+      <xs:element name="X" type="PositiveDecimal"/>
+      <xs:element name="Y" type="PositiveDecimal"/>
+      <xs:element name="Z" type="PositiveDecimal"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="QueryPrefilterType">
+    <xs:sequence>
+      <xs:element name="Type" type="QueryPrefilterEnum"/>
+      <xs:element name="MarginMeters" type="NonNegativeDecimal"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="SpatialIndexType">
+    <xs:sequence>
+      <xs:element name="Type" type="IndexTypeEnum"/>
+      <xs:element name="Frame" type="NonEmptyString"/>
+      <xs:element name="VoxelMeters" type="VoxelType"/>
+      <xs:element name="QueryPrefilter" type="QueryPrefilterType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="SQLiteType">
+    <xs:sequence>
+      <xs:element name="JournalMode" type="JournalModeEnum"/>
+      <xs:element name="Synchronous" type="SynchronousEnum"/>
+      <xs:element name="CacheSizeKiB" type="PositiveInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="TrackStateStoreType">
+    <xs:sequence>
+      <xs:element name="Backend" type="BackendEnum"/>
+      <xs:element name="Path" type="NonEmptyString"/>
+      <xs:element name="SQLite" type="SQLiteType" minOccurs="0"/>
+      <xs:element name="SpatialIndex" type="SpatialIndexType"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="SnapshotContentsType">
+    <xs:sequence>
+      <xs:element name="IncludeState" type="BoolText"/>
+      <xs:element name="IncludeCovariance" type="BoolText"/>
+      <xs:element name="IncludeMetadata" type="BoolText"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="CompressionType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="Codec" type="NonEmptyString"/>
+      <xs:element name="Level" type="NonNegativeInt"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="SnapshotType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="PeriodSeconds" type="PositiveDecimal"/>
+      <xs:element name="OutputPath" type="NonEmptyString"/>
+      <xs:element name="Contents" type="SnapshotContentsType"/>
+      <xs:element name="Compression" type="CompressionType" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="Persistence">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="TrackStateStore" type="TrackStateStoreType"/>
+        <xs:element name="Snapshot" type="SnapshotType"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

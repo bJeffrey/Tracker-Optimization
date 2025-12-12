@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Append-only recording and playback settings.
+-->
+<RecorderPlayback version="1.0">
+
+  <Recorder>
+    <Enabled>true</Enabled>
+    <OutputPath>data/recordings/</OutputPath>
+    <Format>MCAP</Format> <!-- MCAP | CUSTOM | ROSBAG2 -->
+
+    <Streams>
+      <RecordOwnshipNav>true</RecordOwnshipNav>
+      <RecordMeasurements>true</RecordMeasurements>
+      <RecordAssociations>true</RecordAssociations>
+      <RecordTrackDeltas>true</RecordTrackDeltas> <!-- enables replay between snapshots -->
+    </Streams>
+
+    <Rotation>
+      <MaxFileSizeMB>1024</MaxFileSizeMB>
+      <MaxFiles>50</MaxFiles>
+    </Rotation>
+
+    <Compression>
+      <Enabled>true</Enabled>
+      <Codec>ZSTD</Codec>
+      <Level>3</Level>
+    </Compression>
+  </Recorder>
+
+  <Playback>
+    <Enabled>false</Enabled>
+    <InputFile>data/recordings/run_001.mcap</InputFile>
+    <Rate>1.0</Rate> <!-- 1.0 = real-time, 2.0 = 2x, 0 = fastest -->
+    <Deterministic>true</Deterministic>
+  </Playback>
+
+</RecorderPlayback>

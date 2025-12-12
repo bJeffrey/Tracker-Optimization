@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="LogLevelEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="TRACE"/>
+      <xs:enumeration value="DEBUG"/>
+      <xs:enumeration value="INFO"/>
+      <xs:enumeration value="WARN"/>
+      <xs:enumeration value="ERROR"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="LogSinkEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="STDOUT"/>
+      <xs:enumeration value="FILE"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="LoggingType">
+    <xs:sequence>
+      <xs:element name="Level" type="LogLevelEnum"/>
+      <xs:element name="Sink" type="LogSinkEnum"/>
+      <xs:element name="FilePath" type="NonEmptyString" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="MetricsType">
+    <xs:sequence>
+      <xs:element name="Latency" type="BoolText" minOccurs="0"/>
+      <xs:element name="CandidateCounts" type="BoolText" minOccurs="0"/>
+      <xs:element name="HitMissRates" type="BoolText" minOccurs="0"/>
+      <xs:element name="DbCommitTime" type="BoolText" minOccurs="0"/>
+      <xs:element name="AssociationStats" type="BoolText" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="TelemetryType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="EmitRateHz" type="PositiveDecimal"/>
+      <xs:element name="Metrics" type="MetricsType" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ActionsType">
+    <xs:sequence>
+      <xs:element name="Action" type="NonEmptyString" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="ComputeAwareDegradationType">
+    <xs:sequence>
+      <xs:element name="Enabled" type="BoolText"/>
+      <xs:element name="MaxEndToEndLatencyMs" type="PositiveInt"/>
+      <xs:element name="Actions" type="ActionsType" minOccurs="0"/>
+      <xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="TelemetryLogging">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Logging" type="LoggingType"/>
+        <xs:element name="Telemetry" type="TelemetryType" minOccurs="0"/>
+        <xs:element name="ComputeAwareDegradation" type="ComputeAwareDegradationType" minOccurs="0"/>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

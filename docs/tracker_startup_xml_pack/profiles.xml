@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Operating profiles control rates/budgets while keeping total throughput comparable.
+-->
+<Profiles version="1.0">
+
+  <Profile name="OP_50K_1HZ">
+    <TargetUpdateRateHz>1.0</TargetUpdateRateHz>
+    <NominalTrackCount>50000</NominalTrackCount>
+    <TotalUpdatesPerSecond>50000</TotalUpdatesPerSecond>
+
+    <!-- Budgets -->
+    <WorkingSet>
+      <!-- Hard cap on candidates pulled per scan (before AER filtering). -->
+      <MaxCandidatesPerScan>60000</MaxCandidatesPerScan>
+      <!-- Hard cap after coarse gating (input to fine gating / association). -->
+      <MaxGatedTracksPerScan>15000</MaxGatedTracksPerScan>
+    </WorkingSet>
+
+    <!-- Batching / commits -->
+    <Batching>
+      <SoABatchSize>2048</SoABatchSize>
+      <DbCommitCadenceMs>1000</DbCommitCadenceMs> <!-- per scan for 1 Hz -->
+    </Batching>
+  </Profile>
+
+  <Profile name="OP_10K_5HZ">
+    <TargetUpdateRateHz>5.0</TargetUpdateRateHz>
+    <NominalTrackCount>10000</NominalTrackCount>
+    <TotalUpdatesPerSecond>50000</TotalUpdatesPerSecond>
+
+    <WorkingSet>
+      <MaxCandidatesPerScan>15000</MaxCandidatesPerScan>
+      <MaxGatedTracksPerScan>6000</MaxGatedTracksPerScan>
+    </WorkingSet>
+
+    <Batching>
+      <SoABatchSize>1024</SoABatchSize>
+      <!-- Commit every ~200 ms to avoid very large transactions at 5 Hz. -->
+      <DbCommitCadenceMs>200</DbCommitCadenceMs>
+    </Batching>
+  </Profile>
+
+</Profiles>

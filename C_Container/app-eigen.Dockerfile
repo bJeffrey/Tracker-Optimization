@@ -13,17 +13,17 @@ WORKDIR /src
 
 # Enable CRB and EPEL/EPEL-Next, then install toolchain + deps (incl. OpenMP runtime)
 # dnf install not needed since we built an for offline use
-# RUN dnf -y install dnf-plugins-core && \
-#     dnf -y config-manager --set-enabled crb && \
-#     dnf -y install epel-release epel-next-release && \
-#     dnf -y install \
-#         gcc gcc-c++ make \
-#         cmake ninja-build \
-#         eigen3-devel \
-#         doxygen graphviz \
-#         pkgconfig \
-#         libgomp \
-#     && dnf clean all
+RUN dnf -y install dnf-plugins-core && \
+    dnf -y config-manager --set-enabled crb && \
+    dnf -y install epel-release epel-next-release && \
+    dnf -y install \
+        gcc gcc-c++ make \
+        cmake ninja-build \
+        eigen3-devel \
+        doxygen graphviz \
+        pkgconfig \
+        libgomp \
+    && dnf clean all
 
 # Copy project sources
 COPY . /src
