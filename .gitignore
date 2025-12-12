@@ -1,3 +1,7 @@
 *.tar
 /C_Container/docs/html
 *.asv
+docs/la_performance_runs_v2.csv
+docs/xfer.ngzip
+docs/xfer/architecture_v0.png
+docs/xfer/la_overview.txt
