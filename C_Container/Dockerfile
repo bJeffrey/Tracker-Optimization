@@ -56,8 +56,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /src
 COPY . /src
 
-# Configure & build exactly one backend (C++98)
-RUN if [ "$USE_MKL" = "1" ]; then \
 # Configure & build one backend using your CMake options (C++17 comes from CMakeLists.txt)
 RUN --mount=type=cache,target=/ccache,sharing=locked \
     bash -lc 'set -e; \
@@ -65,11 +63,9 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
         eigen) CMAKE_ARGS="-DUSE_MKL=OFF -DUSE_STD=OFF" ;; \
         std)   CMAKE_ARGS="-DUSE_MKL=OFF -DUSE_STD=ON"  ;; \
         mkl)   CMAKE_ARGS="-DUSE_MKL=ON  -DUSE_STD=OFF -DCMAKE_PREFIX_PATH=/opt/intel/oneapi/mkl/latest/lib/cmake" ;; \
+        *) echo "ERROR: BACKEND must be eigen|std|mkl (got: $BACKEND)"; exit 2 ;; \
+      esac; \
       cmake -S . -B /build -G Ninja \
-        -DUSE_MKL=ON \
-        -DCMAKE_CXX_STANDARD=98 \
-        -DCMAKE_PREFIX_PATH=/opt/intel/oneapi/mkl/latest/lib/cmake && \
-      cmake --build /build -j ; \
         $CMAKE_ARGS \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache; \
       cmake --build /build -j'
