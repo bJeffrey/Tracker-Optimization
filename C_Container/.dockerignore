@@ -1,0 +1,12 @@
+.git
+**/build
+**/cmake-build-*
+**/docs
+**/*.o
+**/*.a
+**/*.so
+**/*.exe
+**/*.dll
+**/*.pdb
+**/.vs
+**/.vscode

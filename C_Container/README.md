@@ -1,19 +1,22 @@
-# Linear Algebra Abstraction Framework (CentOS Stream 9 + C++17, Offline-Ready)
+# Linear Algebra Abstraction Framework (C++17, Offline-Ready)
 
 This repository provides a modular, offline-ready C++ linear algebra abstraction framework
 with interchangeable backends (**Eigen**, **Intel MKL**, **Standard C++**) unified under a
-single API. It targets **CentOS Stream 9 (RHEL 9–compatible)** and **C++17** while retaining
-full offline portability.
+single API. The primary container workflow is now based on a **single unified `Dockerfile`**
+(ubuntu-based) while keeping the project itself **portable** across Linux environments.
+
+> **Legacy note:** Older *CentOS Stream 9* `base-*` / `app-*` Dockerfiles may still exist in the repo
+> for reference/rollback, but the recommended path is the unified root `Dockerfile`.
 
 ---
 
 ## 🧱 Overview
 
-| Backend | Library | Highlights | Build Flags |
-|--------|---------|------------|-------------|
-| **Eigen** | Eigen3 | Portable, high‑performance default with OpenMP | `-DUSE_MKL=OFF -DUSE_STD=OFF` |
-| **MKL** | Intel oneAPI MKL | Optimized for Intel CPUs, strong for large/batched ops | `-DUSE_MKL=ON` |
-| **STD** | None | Pure C++ baseline; minimal deps; predictable | `-DUSE_STD=ON` |
+| Backend | Library | Highlights | Docker Build Arg |
+|--------|---------|------------|------------------|
+| **Eigen** | Eigen3 | Portable, high‑performance default with OpenMP | `--build-arg BACKEND=eigen` |
+| **MKL** | Intel oneAPI MKL | Optimized for Intel CPUs, strong for large/batched ops | `--build-arg BACKEND=mkl` |
+| **STD** | None | Pure C++ baseline; minimal deps; predictable | `--build-arg BACKEND=std` |
 
 All backends implement the same batch‑covariance API (see `include/la.h`) and the demo in
 `src/main.cpp` times a Δt‑scaled random‑walk covariance update across many tracks.
@@ -27,35 +30,37 @@ include/
   la.h                # Common API definitions
 src/
   la_eigen.cpp        # Eigen backend (optional OpenMP)
-  la_mkl.cpp          # Intel MKL backend (oneAPI EL9 RPMs)
+  la_mkl.cpp          # Intel MKL backend (oneAPI)
   la_std.cpp          # Standard C++ backend
   main.cpp            # Demo driver (timed batch propagation)
 CMakeLists.txt        # Unified CMake (C++17, OpenMP hints for Eigen)
-build.sh              # Smart build selector (auto/eigen/mkl/std)
-app-eigen.Dockerfile  # CentOS Stream 9 + Eigen
-app-mkl.Dockerfile    # CentOS Stream 9 + MKL
-app-std.Dockerfile    # CentOS Stream 9 + pure-STD
+build.sh              # Smart build selector (auto/eigen/mkl/std) for direct-on-host builds
+Dockerfile            # Unified multi-stage docker build (eigen/std/mkl via BACKEND arg)
+
+# Legacy (optional / may still exist):
+# app-eigen.Dockerfile, app-mkl.Dockerfile, app-std.Dockerfile
+# base-eigen.Dockerfile, base-mkl.Dockerfile, base-std.Dockerfile
 ```
 
 ---
 
-## 🚀 Online Build/Run (Docker)
+## 🚀 Online Build/Run (Docker) — Recommended
 
 ### Eigen (default)
 ```bash
-docker build -t la-demo:eigen -f app-eigen.Dockerfile .
+docker build -t la-demo:eigen --build-arg BACKEND=eigen .
 docker run --rm la-demo:eigen
 ```
 
 ### MKL
 ```bash
-docker build -t la-demo:mkl -f app-mkl.Dockerfile .
+docker build -t la-demo:mkl --build-arg BACKEND=mkl .
 docker run --rm -e MKL_NUM_THREADS=1 -e OMP_NUM_THREADS=1 la-demo:mkl
 ```
 
 ### STD (baseline)
 ```bash
-docker build -t la-demo:std -f app-std.Dockerfile .
+docker build -t la-demo:std --build-arg BACKEND=std .
 docker run --rm la-demo:std
 ```
 
@@ -67,9 +72,9 @@ docker run --rm la-demo:std
 
 ---
 
-## 🧰 Build Directly on RHEL 9 / CentOS 9 (no Docker)
+## 🧰 Build Directly on a Linux Host (no Docker)
 
-The helper script auto‑detects CPU vendor (Intel → MKL, else Eigen). You can override it.
+The helper script can auto‑detect CPU vendor (Intel → MKL, else Eigen). You can override it.
 
 ```bash
 # Make sure the script is LF (not CRLF) on Windows:
@@ -88,20 +93,22 @@ Run the demo:
 cd build && ./demo
 ```
 
+> If you’re not on RHEL/CentOS, you may need to install equivalent packages
+> (compiler toolchain, CMake/Ninja, Eigen, OpenMP runtime, etc.).
+
 ---
 
 ## 📦 Offline Workflow (Containers)
 
 **Goal:** produce images that can be built/used on a fully offline host.
-You have two options; choose one based on your constraints.
 
-### Option A — *Simplest*: Export Fully‑Built App Images
+### Option A — *Simplest*: Export Fully‑Built App Images (Recommended)
 
 1) **Online machine — build the images**
 ```bash
-docker build -t la-demo:eigen -f app-eigen.Dockerfile .
-docker build -t la-demo:mkl   -f app-mkl.Dockerfile   .
-docker build -t la-demo:std   -f app-std.Dockerfile   .
+docker build -t la-demo:eigen --build-arg BACKEND=eigen .
+docker build -t la-demo:mkl   --build-arg BACKEND=mkl   .
+docker build -t la-demo:std   --build-arg BACKEND=std   .
 ```
 
 2) **Export images to tarballs**
@@ -113,7 +120,6 @@ docker save -o la-demo-std.tar   la-demo:std
 
 3) **Copy to offline machine**
 - `la-demo-eigen.tar`, `la-demo-mkl.tar`, `la-demo-std.tar`
-- Your project source tree (this repo), if you also want to build there later.
 
 4) **Offline machine — load and run**
 ```bash
@@ -127,136 +133,53 @@ docker run --rm la-demo:std
 ```
 
 > **Pros:** fastest, least moving parts.  
-> **Cons:** images are larger; re‑build offline requires repeating export.
+> **Cons:** images are larger; rebuilding offline requires repeating export.
 
 ---
 
-### Option B — *Flexible*: Export Small “Base” Images, Build App Offline
+### Option B — *Flexible (Legacy)*: Export Small “Base” Images, Build App Offline
 
-This yields **smaller transfers** and lets you **rebuild app layers offline**.
+This was the older workflow using `base-*` and `app-*` Dockerfiles. It can still be used if those
+files remain in the repo, but it is **not the recommended path** now that the unified `Dockerfile`
+exists.
 
-#### 1) Online — build minimal **base images**
-
-Create two base Dockerfiles (you may already have these names):
-
-**`base-eigen.Dockerfile`** (CentOS 9 + toolchain + Eigen + Doxygen)
-```dockerfile
-# syntax=docker/dockerfile:1.6
-FROM quay.io/centos/centos:stream9
-
-ENV LANG=C.UTF-8
-RUN dnf -y install dnf-plugins-core && dnf -y config-manager --set-enabled crb && \
-    dnf -y install epel-release epel-next-release && \
-    dnf -y install gcc gcc-c++ make cmake ninja-build eigen3-devel doxygen graphviz pkgconf-pkg-config && \
-    dnf clean all
-```
-
-**`base-mkl.Dockerfile`** (CentOS 9 + toolchain + MKL repo + Doxygen)
-```dockerfile
-# syntax=docker/dockerfile:1.6
-FROM quay.io/centos/centos:stream9
-
-ENV LANG=C.UTF-8
-RUN dnf -y install dnf-plugins-core && dnf -y config-manager --set-enabled crb && \
-    dnf -y install gcc gcc-c++ make cmake ninja-build doxygen graphviz pkgconf-pkg-config curl-minimal ca-certificates && \
-    dnf clean all
-
-# Intel oneAPI MKL repo + key
-RUN printf '%s\n' \
-      '[intel-oneapi]' \
-      'name=Intel oneAPI Repository' \
-      'baseurl=https://yum.repos.intel.com/oneapi' \
-      'enabled=1' \
-      'gpgcheck=1' \
-      'repo_gpgcheck=1' \
-      'gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2023.PUB' \
-    > /etc/yum.repos.d/intel-oneapi.repo \
- && rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2023.PUB \
- && dnf -y makecache \
- && dnf -y install intel-oneapi-mkl-devel \
- && dnf clean all
-
-# Helpful envs (define first, then reference; avoids UndefinedVar warnings)
-ENV MKLROOT=/opt/intel/oneapi/mkl/latest
-ENV LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:/opt/intel/oneapi/compiler/latest/linux/lib:$LD_LIBRARY_PATH
-ENV CMAKE_PREFIX_PATH=/opt/intel/oneapi/mkl/latest/lib/cmake${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}
-```
-
-Build and save them:
-```bash
-docker build -t la-base:eigen -f base-eigen.Dockerfile .
-docker build -t la-base:mkl   -f base-mkl.Dockerfile   .
-
-docker save -o la-base-eigen.tar la-base:eigen
-docker save -o la-base-mkl.tar   la-base:mkl
-```
-
-#### 2) Offline — load bases and build app locally
-
-Copy to the offline host:
-- `la-base-eigen.tar`, `la-base-mkl.tar`
-- The project directory (this repo)
-
-Load the bases:
-```bash
-docker load -i la-base-eigen.tar
-docker load -i la-base-mkl.tar
-```
-
-Build app images **reusing the base layers**:
-```bash
-# Eigen app
-docker build -t la-demo:eigen -f app-eigen.Dockerfile .
-
-# MKL app
-docker build -t la-demo:mkl   -f app-mkl.Dockerfile   .
-
-# STD app (uses only CentOS toolchain; no external math lib)
-docker build -t la-demo:std   -f app-std.Dockerfile   .
-```
-
-Run:
-```bash
-docker run --rm la-demo:eigen
-docker run --rm la-demo:mkl
-docker run --rm la-demo:std
-```
+If you keep using the legacy workflow, the high-level steps remain:
+- build `la-base:*` images on an online machine
+- `docker save` them
+- `docker load` them on the offline host
+- build `la-demo:*` app images offline on top of those bases
 
 > **Tip (Windows):** If you edit shell scripts on Windows, ensure LF line endings:
 > `git config core.autocrlf input` or run `dos2unix` before executing in containers.
 
 ---
 
-## 📚 Doxygen Docs (Auto‑Generated in Build)
+## 📚 Doxygen Docs (Optional)
 
-Each Dockerfile generates Doxygen pages into the image at `/src/docs/html`.  
+Docs are generated **only if enabled** at build time:
+
+```bash
+docker build -t la-demo:eigen --build-arg BACKEND=eigen --build-arg GENERATE_DOCS=1 .
+```
+
+In the unified Dockerfile, docs are copied into the runtime image at:
+- `/usr/local/share/la-demo/docs`
+
 To copy them to your host **after a build**:
 
 ```bash
-# Eigen
-CID=$(docker create la-demo:eigen) && \
-docker cp "$CID":/src/docs ./docs-eigen && \
-docker rm "$CID"
-
-# MKL
-CID=$(docker create la-demo:mkl) && \
-docker cp "$CID":/src/docs ./docs-mkl && \
-docker rm "$CID"
-
-# STD
-CID=$(docker create la-demo:std) && \
-docker cp "$CID":/src/docs ./docs-std && \
-docker rm "$CID"
+CID=$(docker create la-demo:eigen) && docker cp "$CID":/usr/local/share/la-demo/docs ./docs-eigen && docker rm "$CID"
 ```
 
 On Windows PowerShell:
 ```powershell
 $cid = docker create la-demo:eigen
-docker cp "$cid`:/src/docs" ".\docs-eigen"
+docker cp "$cid`:/usr/local/share/la-demo/docs" ".\docs-eigen"
 docker rm $cid
 ```
 
-The HTML entry point is `docs-*/html/index.html`.
+The HTML entry point (when generated) is typically:
+- `docs-eigen/html/index.html`
 
 ---
 
@@ -274,7 +197,7 @@ The HTML entry point is `docs-*/html/index.html`.
 
 ## 🧠 Notes & Tips
 
-- Always use **`-DCMAKE_BUILD_TYPE=Release`** for meaningful timing.  
+- Always use **`-DCMAKE_BUILD_TYPE=Release`** for meaningful timing (the CMake config defaults to Release if unspecified).  
 - Small matrices (e.g., 6×6 typical of many ESM states) can favor Eigen or even STD due to MKL dispatch overhead; MKL shines with larger `n` and large batch counts.  
 - The demo avoids `F P Fᵀ` when `F = I` for a realistic stationary ESM update path.  
 - If you need a shell in a built image: `docker run --rm -it --entrypoint /bin/bash la-demo:eigen`.
