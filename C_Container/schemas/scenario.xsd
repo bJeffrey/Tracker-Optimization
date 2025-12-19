@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="TargetsSourceType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="generator"/>
+      <xs:enumeration value="catalog_csv"/>
+      <xs:enumeration value="catalog_xml"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="DbPopulatedActionType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="SKIP_GENERATION"/>
+      <xs:enumeration value="FORCE_REGENERATION"/>
+      <xs:enumeration value="ERROR"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="ScenarioCatalog">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Scenario" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Name" type="NonEmptyString" minOccurs="0"/>
+
+              <xs:element name="Refs">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Ownship">
+                      <xs:complexType>
+                        <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="Targets">
+                      <xs:complexType>
+                        <xs:attribute name="sourceType" type="TargetsSourceType" use="required"/>
+                        <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                  <xs:attribute name="baseDir" type="NonEmptyString" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="LoadPolicy" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="IfDatabasePopulated" minOccurs="0">
+                      <xs:complexType>
+                        <xs:attribute name="action" type="DbPopulatedActionType" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="OnCliFlag" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="NonEmptyString" use="required"/>
+                        <xs:attribute name="action" type="DbPopulatedActionType" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+            </xs:sequence>
+            <xs:attribute name="id" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

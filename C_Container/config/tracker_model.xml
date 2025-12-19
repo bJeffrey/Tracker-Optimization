@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrackerModel version="1.0">
+  <State>
+    <Frame>ECEF</Frame>
+    <Dimension>9</Dimension>
+    <Order>x y z vx vy vz ax ay az</Order>
+  </State>
+
+  <ProcessModel>
+    <Type>CA</Type>
+    <!-- Default dt used for prediction when not driven by sensor schedule -->
+    <DefaultDtSeconds>0.2</DefaultDtSeconds>
+
+    <!-- Placeholder tuning; you can refine later -->
+    <ProcessNoise>
+      <!-- Interpreted as accel random-walk intensity or similar depending on implementation -->
+      <SigmaAccelMps2>1.0</SigmaAccelMps2>
+    </ProcessNoise>
+  </ProcessModel>
+
+  <Covariance>
+    <!-- For scale (1M tracks), prefer symmetric storage to reduce IO/memory -->
+    <Storage>upper_tri_45</Storage>
+
+    <!-- Optional numerical hygiene -->
+    <SymmetrizeOnWrite>true</SymmetrizeOnWrite>
+    <MinEigenvalueClamp>0.0</MinEigenvalueClamp>
+  </Covariance>
+</TrackerModel>

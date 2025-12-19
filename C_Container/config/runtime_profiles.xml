@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RuntimeProfiles version="1.0">
+  <Profile id="profile_50k_1hz">
+    <UpdateRateHz>1.0</UpdateRateHz>
+    <MaxTracksActive>50000</MaxTracksActive>
+
+    <!-- Working-set pipeline sizing -->
+    <Batching>
+      <FetchBatchSize>20000</FetchBatchSize>
+      <UpdateBatchSize>20000</UpdateBatchSize>
+      <CommitBatchSize>20000</CommitBatchSize>
+    </Batching>
+
+    <!-- How far ahead of an expected scan we prefetch candidate tracks -->
+    <PrefetchHorizonSeconds>0.25</PrefetchHorizonSeconds>
+  </Profile>
+
+  <Profile id="profile_10k_5hz">
+    <UpdateRateHz>5.0</UpdateRateHz>
+    <MaxTracksActive>10000</MaxTracksActive>
+
+    <Batching>
+      <FetchBatchSize>5000</FetchBatchSize>
+      <UpdateBatchSize>5000</UpdateBatchSize>
+      <CommitBatchSize>5000</CommitBatchSize>
+    </Batching>
+
+    <PrefetchHorizonSeconds>0.10</PrefetchHorizonSeconds>
+  </Profile>
+</RuntimeProfiles>

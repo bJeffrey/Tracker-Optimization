@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="SensorType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="RADAR"/>
+      <xs:enumeration value="ESM"/>
+      <xs:enumeration value="EOIR"/>
+      <xs:enumeration value="LINK"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="AngleRangeType">
+    <xs:attribute name="min" type="xs:double" use="required"/>
+    <xs:attribute name="max" type="xs:double" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="FrustumType">
+    <xs:sequence>
+      <xs:element name="AzimuthDeg" type="AngleRangeType" minOccurs="0"/>
+      <xs:element name="ElevationDeg" type="AngleRangeType" minOccurs="0"/>
+      <xs:element name="RangeMeters" type="AngleRangeType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="Sensors">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Sensor" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Type" type="SensorType"/>
+
+              <xs:element name="ScanVolume" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Frame" type="FrameType" minOccurs="0"/>
+                    <xs:element name="Frustum" type="FrustumType" minOccurs="0"/>
+
+                    <xs:element name="Sphere" minOccurs="0">
+                      <xs:complexType>
+                        <xs:sequence>
+                          <xs:element name="RangeMeters" type="PositiveDouble"/>
+                        </xs:sequence>
+                      </xs:complexType>
+                    </xs:element>
+
+                    <xs:element name="QueryAabbInflateMeters" type="NonNegativeDouble" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="Schedule" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="ScanRateHz" type="PositiveDouble" minOccurs="0"/>
+                    <xs:element name="ScanEvents" minOccurs="0">
+                      <xs:complexType>
+                        <xs:sequence>
+                          <xs:element name="Event" minOccurs="0" maxOccurs="unbounded">
+                            <xs:complexType>
+                              <xs:sequence>
+                                <xs:element name="TimeSeconds" type="NonNegativeDouble"/>
+                              </xs:sequence>
+                            </xs:complexType>
+                          </xs:element>
+                        </xs:sequence>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+            </xs:sequence>
+            <xs:attribute name="id" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

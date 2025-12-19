@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:element name="RuntimeProfiles">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Profile" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="UpdateRateHz" type="PositiveDouble"/>
+              <xs:element name="MaxTracksActive" type="PositiveInt"/>
+
+              <xs:element name="Batching" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="FetchBatchSize" type="PositiveInt" minOccurs="0"/>
+                    <xs:element name="UpdateBatchSize" type="PositiveInt" minOccurs="0"/>
+                    <xs:element name="CommitBatchSize" type="PositiveInt" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="PrefetchHorizonSeconds" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="MaxTracksInQuery" type="PositiveInt" minOccurs="0"/>
+              <xs:element name="TimeBudgetMs" type="NonNegativeDouble" minOccurs="0"/>
+            </xs:sequence>
+            <xs:attribute name="id" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

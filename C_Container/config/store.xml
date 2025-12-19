@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Store version="1.0">
+  <!--
+    Store profiles control persistence strategy.
+    Backend (sqlite_rtree) is runtime; math backend is compile-time (container).
+  -->
+
+  <Profile id="store_hot_only_sqlite_mem">
+    <Mode>HOT_ONLY</Mode>
+    <Backend>SQLITE_RTREE</Backend>
+
+    <Sqlite>
+      <!-- Entire DB in RAM -->
+      <DbUri>:memory:</DbUri>
+      <JournalMode>MEMORY</JournalMode>
+      <Synchronous>OFF</Synchronous>
+    </Sqlite>
+
+    <RTree>
+      <PaddingMeters>50</PaddingMeters>
+    </RTree>
+  </Profile>
+
+  <Profile id="store_hot_plus_warm_sqlite_file">
+    <Mode>HOT_PLUS_WARM</Mode>
+    <Backend>SQLITE_RTREE</Backend>
+
+    <Sqlite>
+      <!-- Warm store on disk -->
+      <DbUri>./data/tracks.db</DbUri>
+      <JournalMode>WAL</JournalMode>
+      <Synchronous>NORMAL</Synchronous>
+    </Sqlite>
+
+    <RTree>
+      <PaddingMeters>50</PaddingMeters>
+    </RTree>
+  </Profile>
+</Store>

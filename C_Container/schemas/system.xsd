@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:element name="SystemConfig">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Active" minOccurs="1">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="RuntimeProfile">
+                <xs:complexType>
+                  <xs:attribute name="id" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="StoreProfile">
+                <xs:complexType>
+                  <xs:attribute name="id" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="Scenario">
+                <xs:complexType>
+                  <xs:attribute name="id" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Refs" minOccurs="1">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="RuntimeProfiles">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="TrackerModel">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="Performance" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="Sensors" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="GatingAssoc" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="Store">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="Persistence" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="ScenarioFile">
+                <xs:complexType>
+                  <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="baseDir" type="NonEmptyString" use="optional"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

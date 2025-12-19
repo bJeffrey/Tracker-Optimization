@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Sensors version="1.0">
+  <Sensor id="radar_1">
+    <Type>RADAR</Type>
+
+    <!-- Scan volume defined relative to ownship; used to query candidate tracks -->
+    <ScanVolume>
+      <Frame>OWNERSHIP_BODY</Frame>
+      <Frustum>
+        <AzimuthDeg min="-60" max="60"/>
+        <ElevationDeg min="-10" max="20"/>
+        <RangeMeters min="0" max="300000"/>
+      </Frustum>
+
+      <!-- Used for fast DB query: convert scan frustum to ECEF AABB and inflate -->
+      <QueryAabbInflateMeters>2000</QueryAabbInflateMeters>
+    </ScanVolume>
+
+    <Schedule>
+      <!-- Minimal schedule: periodic scans -->
+      <ScanRateHz>5.0</ScanRateHz>
+    </Schedule>
+  </Sensor>
+</Sensors>

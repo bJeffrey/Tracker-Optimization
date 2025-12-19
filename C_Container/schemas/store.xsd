@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="JournalModeType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="DELETE"/>
+      <xs:enumeration value="TRUNCATE"/>
+      <xs:enumeration value="PERSIST"/>
+      <xs:enumeration value="MEMORY"/>
+      <xs:enumeration value="WAL"/>
+      <xs:enumeration value="OFF"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="SynchronousType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="OFF"/>
+      <xs:enumeration value="NORMAL"/>
+      <xs:enumeration value="FULL"/>
+      <xs:enumeration value="EXTRA"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="Store">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Profile" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Mode" type="StoreModeType"/>
+              <xs:element name="Backend" type="BackendType"/>
+
+              <xs:element name="Sqlite" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="DbUri" type="NonEmptyString" minOccurs="0"/>
+                    <xs:element name="JournalMode" type="JournalModeType" minOccurs="0"/>
+                    <xs:element name="Synchronous" type="SynchronousType" minOccurs="0"/>
+                    <xs:element name="PageSize" type="PositiveInt" minOccurs="0"/>
+                    <xs:element name="CacheSizePages" type="NonNegativeInt" minOccurs="0"/>
+                    <xs:element name="TempStore" type="NonEmptyString" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="RTree" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="PaddingMeters" type="NonNegativeDouble" minOccurs="0"/>
+                    <xs:element name="RebuildIntervalSeconds" type="NonNegativeDouble" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+            </xs:sequence>
+            <xs:attribute name="id" type="NonEmptyString" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

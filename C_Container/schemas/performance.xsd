@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:element name="Performance">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Threads" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="DefaultOmpThreads" type="PositiveInt" minOccurs="0"/>
+              <xs:element name="AllowEnvOverride" type="BoolText" minOccurs="0"/>
+              <xs:element name="SetEnvDefaultsIfUnset" type="BoolText" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="EnvDefaults" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Var" type="EnvVarType" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Diagnostics" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="PrintStartupSummary" type="BoolText" minOccurs="0"/>
+              <xs:element name="PrintStoreStats" type="BoolText" minOccurs="0"/>
+              <xs:element name="PrintTimingStats" type="BoolText" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

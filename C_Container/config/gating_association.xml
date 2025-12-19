@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<GatingAssociation version="1.0">
+  <CoarseGating>
+    <!-- Very fast gate before any statistical gating/association -->
+    <Enabled>true</Enabled>
+    <!-- Example: AABB overlap / range-only prefilter, etc. -->
+    <AabbInflateMeters>500</AabbInflateMeters>
+  </CoarseGating>
+
+  <FineGating>
+    <Enabled>true</Enabled>
+    <!-- Example: chi-square threshold for position residual in 3D -->
+    <ChiSquareThreshold dof="3">16.27</ChiSquareThreshold> <!-- ~99.9% for dof=3 -->
+  </FineGating>
+
+  <Association>
+    <Method>GNN</Method>
+  </Association>
+
+  <HitMissPolicy>
+    <OnHit>
+      <ResetMissCount>true</ResetMissCount>
+      <QualityBoost>1.0</QualityBoost>
+    </OnHit>
+
+    <OnMiss>
+      <IncrementMissCount>true</IncrementMissCount>
+      <MaxMissesBeforeDelete>10</MaxMissesBeforeDelete>
+      <QualityDecay>0.9</QualityDecay>
+    </OnMiss>
+  </HitMissPolicy>
+</GatingAssociation>

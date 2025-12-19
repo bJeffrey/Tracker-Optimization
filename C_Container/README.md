@@ -154,6 +154,25 @@ If you keep using the legacy workflow, the high-level steps remain:
 
 ---
 
+### Option C — Build dev for ease of development, then make quick changes in shell
+
+1) **Build the dev image**
+```bash
+docker build -t la-dev:eigen --target build --build-arg BACKEND=eigen .
+```
+
+2) **Run container (from Powershell) and open to a bash shell**
+```bash
+docker run --rm -it --entrypoint /bin/bash -v ${PWD}:/src -w /src la-dev:eigen
+```
+
+3) **Compile code**
+```bash
+cmake -S . -B build -G Ninja -DUSE_MKL=OFF -DUSE_STD=OFF
+cmake --build build -j
+./build/demo
+```
+
 ## 📚 Doxygen Docs (Optional)
 
 Docs are generated **only if enabled** at build time:

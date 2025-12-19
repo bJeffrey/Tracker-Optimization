@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="AssocMethodType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="GNN"/>
+      <xs:enumeration value="JPDA"/>
+      <xs:enumeration value="MHT"/>
+      <xs:enumeration value="NONE"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="DofType">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="12"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="GatingAssociation">
+    <xs:complexType>
+      <xs:sequence>
+
+        <xs:element name="CoarseGating" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Enabled" type="BoolText" minOccurs="0"/>
+              <xs:element name="AabbInflateMeters" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="RangeOnlyEnabled" type="BoolText" minOccurs="0"/>
+              <xs:element name="MaxRangeMeters" type="NonNegativeDouble" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="FineGating" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Enabled" type="BoolText" minOccurs="0"/>
+              <xs:element name="ChiSquareThreshold" minOccurs="0">
+                <xs:complexType>
+                  <xs:simpleContent>
+                    <xs:extension base="NonNegativeDouble">
+                      <xs:attribute name="dof" type="DofType" use="optional"/>
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="PGate" type="Fraction01" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Association" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Method" type="AssocMethodType" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="HitMissPolicy" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="OnHit" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="ResetMissCount" type="BoolText" minOccurs="0"/>
+                    <xs:element name="QualityBoost" type="xs:double" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="OnMiss" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="IncrementMissCount" type="BoolText" minOccurs="0"/>
+                    <xs:element name="MaxMissesBeforeDelete" type="PositiveInt" minOccurs="0"/>
+                    <xs:element name="QualityDecay" type="xs:double" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SystemConfig version="1.0">
+  <!--
+    Root entry point. This file only selects runtime profiles, store mode, and scenario.
+  -->
+
+  <Active>
+    <RuntimeProfile id="profile_50k_1hz"/>
+    <StoreProfile id="store_hot_only_sqlite_mem"/>
+    <Scenario id="scenario_1m_ca9"/>
+  </Active>
+
+  <Refs baseDir="config">
+    <RuntimeProfiles href="runtime_profiles.xml"/>
+    <TrackerModel    href="tracker_model.xml"/>
+    <Performance     href="performance.xml"/>
+
+    <Sensors         href="sensors.xml"/>
+    <GatingAssoc     href="gating_association.xml"/>
+
+    <Store           href="store.xml"/>
+    <Persistence     href="persistence.xml"/>
+
+    <!-- Scenario file will reference ownship + targets -->
+    <ScenarioFile    href="scenarios/scenario_default.xml"/>
+  </Refs>
+</SystemConfig>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Ownship version="1.0" id="ownship_1">
+  <Frame>ECEF</Frame>
+
+  <!-- Example ECEF (meters). Replace with your actual desired location. -->
+  <PositionMeters x="1337800.0" y="-4654042.0" z="4138300.0"/>
+
+  <VelocityMps x="0.0" y="0.0" z="0.0"/>
+</Ownship>

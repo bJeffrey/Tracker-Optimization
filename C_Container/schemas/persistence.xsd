@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:element name="Persistence">
+    <xs:complexType>
+      <xs:sequence>
+
+        <xs:element name="Snapshots" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Enabled" type="BoolText" minOccurs="0"/>
+              <xs:element name="IntervalSeconds" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="Directory" type="NonEmptyString" minOccurs="0"/>
+              <xs:element name="RetainCount" type="NonNegativeInt" minOccurs="0"/>
+              <xs:element name="Compression" type="CompressionType" minOccurs="0"/>
+              <xs:element name="SnapshotOnShutdown" type="BoolText" minOccurs="0"/>
+              <xs:element name="SnapshotOnSignal" type="BoolText" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Recovery" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="LoadLatestOnStartup" type="BoolText" minOccurs="0"/>
+              <xs:element name="DeltaLog" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="enabled" type="BoolText" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

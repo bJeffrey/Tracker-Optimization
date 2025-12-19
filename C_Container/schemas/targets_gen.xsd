@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="MixtureModelType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="global_geodetic"/>
+      <xs:enumeration value="enu_bubble"/>
+      <xs:enumeration value="ecef_box"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="LastUpdateModelType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="exponential_age"/>
+      <xs:enumeration value="uniform_age"/>
+      <xs:enumeration value="mixture_age"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="AltitudeMetersType">
+    <xs:sequence>
+      <xs:element name="Band" type="BandType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+    <xs:attribute name="min" type="xs:double" use="optional"/>
+    <xs:attribute name="max" type="xs:double" use="optional"/>
+  </xs:complexType>
+
+  <xs:complexType name="MixtureModelNodeType">
+    <xs:sequence>
+      <xs:element name="AltitudeMeters" type="AltitudeMetersType" minOccurs="0"/>
+      <xs:element name="Center" type="NonEmptyString" minOccurs="0"/>
+      <xs:element name="RadiusMeters" type="PositiveDouble" minOccurs="0"/>
+      <xs:element name="EcefBox" minOccurs="0">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="MinMeters" type="Vec3MetersType"/>
+            <xs:element name="MaxMeters" type="Vec3MetersType"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+    <xs:attribute name="type" type="MixtureModelType" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="MixtureComponentType">
+    <xs:sequence>
+      <xs:element name="Model" type="MixtureModelNodeType"/>
+    </xs:sequence>
+    <xs:attribute name="fraction" type="Fraction01" use="optional"/>
+  </xs:complexType>
+
+  <xs:element name="TargetGeneration">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Count" type="PositiveInt"/>
+        <xs:element name="Seed" type="NonNegativeInt"/>
+
+        <xs:element name="Mixture" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Background" type="MixtureComponentType" minOccurs="0"/>
+              <xs:element name="Local" type="MixtureComponentType" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Kinematics" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+
+              <xs:element name="Velocity" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="SpeedMps" type="BandListType" minOccurs="0"/>
+                    <xs:element name="VerticalSpeedMps" minOccurs="0">
+                      <xs:complexType>
+                        <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+                        <xs:attribute name="mean" type="xs:double" use="optional"/>
+                        <xs:attribute name="std" type="NonNegativeDouble" use="optional"/>
+                        <xs:attribute name="min" type="xs:double" use="optional"/>
+                        <xs:attribute name="max" type="xs:double" use="optional"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="Acceleration" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="MagnitudeMps2" type="BandListType" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="LastUpdateTime" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="NowSeconds" type="xs:double" minOccurs="0"/>
+              <xs:element name="TauSeconds" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="MaxAgeSeconds" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="MinAgeSeconds" type="NonNegativeDouble" minOccurs="0"/>
+            </xs:sequence>
+            <xs:attribute name="model" type="LastUpdateModelType" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Covariance" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="SigmaPosMeters" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+                  <xs:attribute name="min" type="NonNegativeDouble" use="optional"/>
+                  <xs:attribute name="max" type="NonNegativeDouble" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="SigmaVelMps" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+                  <xs:attribute name="min" type="NonNegativeDouble" use="optional"/>
+                  <xs:attribute name="max" type="NonNegativeDouble" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="SigmaAccelMps2" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+                  <xs:attribute name="min" type="NonNegativeDouble" use="optional"/>
+                  <xs:attribute name="max" type="NonNegativeDouble" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+
+              <xs:element name="RotatePositionBlock" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="enabled" type="BoolText" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="RotateVelocityBlock" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="enabled" type="BoolText" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="RotateAccelBlock" minOccurs="0">
+                <xs:complexType>
+                  <xs:attribute name="enabled" type="BoolText" use="optional"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+      <xs:attribute name="id" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

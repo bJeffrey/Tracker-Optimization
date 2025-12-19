@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Performance version="1.0">
+  <!-- Backend is chosen by container; this file controls threads/batching defaults only. -->
+
+  <Threads>
+    <DefaultOmpThreads>8</DefaultOmpThreads>
+
+    <!-- If true, runtime will respect environment variables (OMP_NUM_THREADS, etc.) -->
+    <AllowEnvOverride>true</AllowEnvOverride>
+
+    <!-- If true, runtime may set env defaults ONLY if not already set by user -->
+    <SetEnvDefaultsIfUnset>true</SetEnvDefaultsIfUnset>
+  </Threads>
+
+  <EnvDefaults>
+    <!-- Safe to include even when MKL isn't present; runtime can ignore if not applicable -->
+    <Var name="OMP_PROC_BIND" value="true"/>
+    <Var name="OMP_PLACES" value="cores"/>
+    <Var name="MKL_DYNAMIC" value="false"/>
+    <Var name="MKL_NUM_THREADS" value="1"/>
+  </EnvDefaults>
+
+  <Diagnostics>
+    <!-- Print detected backend + effective thread settings at startup -->
+    <PrintStartupSummary>true</PrintStartupSummary>
+  </Diagnostics>
+</Performance>

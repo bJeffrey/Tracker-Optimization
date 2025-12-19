@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <xs:simpleType name="NonEmptyString">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="NonNegativeInt">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="PositiveInt">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="NonNegativeDouble">
+    <xs:restriction base="xs:double">
+      <xs:minInclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="PositiveDouble">
+    <xs:restriction base="xs:double">
+      <xs:minExclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="Fraction01">
+    <xs:restriction base="xs:double">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="FrameType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="ECEF"/>
+      <xs:enumeration value="OWNERSHIP_BODY"/>
+      <xs:enumeration value="ENU"/>
+      <xs:enumeration value="NED"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="BackendType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="SQLITE_RTREE"/>
+      <xs:enumeration value="RAM_NATIVE"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="StoreModeType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="HOT_ONLY"/>
+      <xs:enumeration value="HOT_PLUS_WARM"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="CompressionType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="none"/>
+      <xs:enumeration value="zstd"/>
+      <xs:enumeration value="lz4"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="BoolText">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="true"/>
+      <xs:enumeration value="false"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="EnvVarType">
+    <xs:attribute name="name" type="NonEmptyString" use="required"/>
+    <xs:attribute name="value" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="BandType">
+    <xs:attribute name="fraction" type="Fraction01" use="optional"/>
+    <xs:attribute name="min" type="xs:double" use="optional"/>
+    <xs:attribute name="max" type="xs:double" use="optional"/>
+  </xs:complexType>
+
+  <xs:complexType name="BandListType">
+    <xs:sequence>
+      <xs:element name="Band" type="BandType" minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="model" type="NonEmptyString" use="optional"/>
+  </xs:complexType>
+
+  <xs:complexType name="Vec3MetersType">
+    <xs:attribute name="x" type="xs:double" use="required"/>
+    <xs:attribute name="y" type="xs:double" use="required"/>
+    <xs:attribute name="z" type="xs:double" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Vec3MpsType">
+    <xs:attribute name="x" type="xs:double" use="required"/>
+    <xs:attribute name="y" type="xs:double" use="required"/>
+    <xs:attribute name="z" type="xs:double" use="required"/>
+  </xs:complexType>
+
+</xs:schema>

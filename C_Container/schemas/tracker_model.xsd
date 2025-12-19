@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:simpleType name="ProcessModelType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="CA"/>
+      <xs:enumeration value="CV"/>
+      <xs:enumeration value="CT"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="CovStorageType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="full"/>
+      <xs:enumeration value="upper_tri_45"/>
+      <xs:enumeration value="chol_upper_45"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="TrackerModel">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="State">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Frame" type="FrameType"/>
+              <xs:element name="Dimension" type="PositiveInt"/>
+              <xs:element name="Order" type="NonEmptyString"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="ProcessModel" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Type" type="ProcessModelType"/>
+              <xs:element name="DefaultDtSeconds" type="PositiveDouble" minOccurs="0"/>
+              <xs:element name="ProcessNoise" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="SigmaAccelMps2" type="NonNegativeDouble" minOccurs="0"/>
+                    <xs:element name="SigmaJerkMps3" type="NonNegativeDouble" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="Covariance">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Storage" type="CovStorageType"/>
+              <xs:element name="SymmetrizeOnWrite" type="BoolText" minOccurs="0"/>
+              <xs:element name="MinEigenvalueClamp" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="StoreCholesky" type="BoolText" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>
