@@ -1,0 +1,80 @@
+Matrix Optimization – Next Steps (Post Config-Driven Demo)
+
+Checkpoint (what’s working now)
+- XML + XSD validation works end-to-end
+- Config loader resolves all referenced files correctly
+- Demo runs a backend-selected batched RW covariance update (P += Q·dt) using full 9×9
+- Timing + checksum output is stable
+
+Recommended next steps (minimal scope, maximum payoff)
+
+1) Add a TrackBatch structure + metadata arrays (no database yet)
+Goal: keep your fast SoA batch layout, but start carrying the minimal “real tracker” metadata you’ll need.
+Suggested fields (SoA arrays):
+- track_id[]            (uint64)
+- last_update_time_s[]  (double)
+- status[]              (enum: ACTIVE / COASTING / DROPPED)
+- quality[]             (float, optional)
+- x[]                   (state, batch-major: N x 9 doubles)
+- P[]                   (covariance, batch-major: N x 81 doubles; full 9×9 for now)
+
+Why:
+- Lets you implement hit/miss, aging, and scheduling policy without committing to a DB design yet.
+- Keeps the memory layout compatible with batched math kernels.
+
+2) Generate synthetic tracks deterministically (ECEF) from config
+Goal: replace “load from DB” with deterministic “seeded generation” so performance tests are repeatable.
+Use TargetsGen config:
+- Position: uniform in ECEF box (from config Background/Local mixture)
+- Velocity/Acceleration: distributions from config (SpeedMps bands, etc.)
+- Covariance initialization: sigma ranges / simple diagonal to start
+- last_update_time_s: use model (uniform_age / exponential_age / mixture_age)
+
+Why:
+- Gives you 10k–1M tracks quickly and reproducibly.
+- Provides realistic variability in age/covariance needed for later scheduling logic.
+
+3) Add a scan-volume query stub (broadphase) that returns a candidate list
+Goal: mimic “get tracks in scan volume” without building SQLite/R*Tree yet.
+Implement a coarse ECEF grid index:
+- Choose cell size (e.g., 10–20 km cubes)
+- Compute CellKey from ECEF position (floor(x/cell), floor(y/cell), floor(z/cell))
+- Maintain unordered_map<CellKey, vector<track_index>>
+Query:
+- Given a scan volume around ownship (start with an ECEF sphere radius), enumerate intersecting cells
+- Return candidate indices (broadphase)
+
+Why:
+- Matches the broadphase→narrowphase pattern used in R-trees and spatial DBs.
+- Lets you build the rest of the pipeline while keeping the “query subset fast” requirement.
+
+4) Run the existing batch propagation on the returned subset only
+Goal: confirm the end-to-end “subset processing” pattern you’ll use with the real DB.
+Pipeline shape:
+- candidates = index.query(scan_volume)
+- gather: build contiguous x_batch / P_batch for candidates
+- propagate: run RW batched update (current fast kernel)
+- (later) gating + association here
+- scatter: write updated x/P back to global arrays
+
+Why:
+- This is the core performance pattern: gather→compute→scatter, minimizing random access.
+
+5) Add timing breakdowns so optimization is guided by data
+Goal: see where time goes before expanding scope.
+Record timing for:
+- broadphase query
+- gather
+- propagate
+- scatter
+- total
+
+Why:
+- Helps you decide if you need: better indexing, better cache locality, larger batches, or parallelism changes.
+
+Next deliverable (once you’re ready)
+- Patch zip that adds:
+  - TrackBatch (SoA)
+  - ECEF grid index (broadphase)
+  - main.cpp flow: generate→index→query→gather→propagate→scatter
+  - timing breakdown prints

@@ -42,20 +42,31 @@ endif()
 # ------------------------------
 # Backend selection
 # ------------------------------
+# NOTE: We now also compile the backend-selected fast RW batch update:
+#   P <- P + Q*dt   (full NxN; currently N=9 for CA9 integration)
 if (USE_STD)
   message(STATUS "Building with baseline STD backend (no Eigen/MKL)")
-  target_sources(simple_la PRIVATE src/la_std.cpp)
+  target_sources(simple_la PRIVATE
+    src/la_std.cpp
+    src/la_batch_rw_std.cpp
+  )
 
 elseif (USE_MKL)
   message(STATUS "Building with Intel MKL backend")
   find_package(MKL REQUIRED)
-  target_sources(simple_la PRIVATE src/la_mkl.cpp)
+  target_sources(simple_la PRIVATE
+    src/la_mkl.cpp
+    src/la_batch_rw_mkl.cpp
+  )
   target_link_libraries(simple_la PUBLIC MKL::MKL)
 
 else()
   message(STATUS "Building with Eigen backend (default)")
   find_package(Eigen3 REQUIRED)
-  target_sources(simple_la PRIVATE src/la_eigen.cpp)
+  target_sources(simple_la PRIVATE
+    src/la_eigen.cpp
+    src/la_batch_rw_eigen.cpp
+  )
   target_link_libraries(simple_la PUBLIC Eigen3::Eigen)
   if (EIGEN_DONT_PAR)
     target_compile_definitions(simple_la PUBLIC EIGEN_DONT_PARALLELIZE)
@@ -89,19 +100,11 @@ if (ENABLE_LTO)
 endif()
 
 # ------------------------------
-# Demo executable (existing)
+# Config loader library (libxml2)
 # ------------------------------
-add_executable(demo src/main.cpp)
-target_link_libraries(demo PRIVATE simple_la)
-if (ENABLE_LTO AND TARGET demo)
-  set_property(TARGET demo PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-endif()
-
-# ------------------------------
-# Config loader tool (new): config_check
-# ------------------------------
+# NOTE: demo now loads + validates XML, so ENABLE_CONFIG must be ON for this integration step.
 if (ENABLE_CONFIG)
-  message(STATUS "ENABLE_CONFIG=ON: building config_check with libxml2")
+  message(STATUS "ENABLE_CONFIG=ON: building config_loader (libxml2) and config_check")
 
   add_library(config_loader STATIC
     src/config/config_loader.cpp
@@ -115,13 +118,15 @@ if (ENABLE_CONFIG)
   find_package(LibXml2 QUIET)
   if (LibXml2_FOUND)
     target_include_directories(config_loader PRIVATE ${LIBXML2_INCLUDE_DIR})
-    target_link_libraries(config_loader PRIVATE ${LIBXML2_LIBRARIES})
+    # IMPORTANT: libxml2 must be PUBLIC so consumers of this static lib link correctly.
+    target_link_libraries(config_loader PUBLIC ${LIBXML2_LIBRARIES})
     target_compile_definitions(config_loader PRIVATE HAVE_LIBXML2=1)
   else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
     target_include_directories(config_loader PRIVATE ${LIBXML2_INCLUDE_DIRS})
-    target_link_libraries(config_loader PRIVATE ${LIBXML2_LIBRARIES})
+    # IMPORTANT: libxml2 must be PUBLIC so consumers of this static lib link correctly.
+    target_link_libraries(config_loader PUBLIC ${LIBXML2_LIBRARIES})
     target_compile_definitions(config_loader PRIVATE HAVE_LIBXML2=1)
   endif()
 
@@ -131,4 +136,23 @@ if (ENABLE_CONFIG)
   if (ENABLE_LTO AND TARGET config_check)
     set_property(TARGET config_check PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
   endif()
+else()
+  message(WARNING "ENABLE_CONFIG=OFF: config loader tools will not be built.")
+endif()
+
+# ------------------------------
+# Demo executable (config-driven)
+# ------------------------------
+add_executable(demo src/main.cpp)
+target_link_libraries(demo PRIVATE simple_la)
+
+# demo now depends on the XML config loader
+if (ENABLE_CONFIG)
+  target_link_libraries(demo PRIVATE config_loader)
+else()
+  message(FATAL_ERROR "demo requires ENABLE_CONFIG=ON (config-driven main.cpp). Reconfigure with -DENABLE_CONFIG=ON.")
+endif()
+
+if (ENABLE_LTO AND TARGET demo)
+  set_property(TARGET demo PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
