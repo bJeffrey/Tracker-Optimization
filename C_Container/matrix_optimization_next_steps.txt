@@ -1,10 +1,11 @@
-Matrix Optimization – Next Steps (Post Config-Driven Demo)
+Matrix Optimization – Next Steps (Post Config-Driven Demo, Sensor-Driven Scan Queries)
 
 Checkpoint (what’s working now)
 - XML + XSD validation works end-to-end
-- Config loader resolves all referenced files correctly
+- Config loader resolves all referenced files correctly (system → scenario → ownship/targets)
 - Demo runs a backend-selected batched RW covariance update (P += Q·dt) using full 9×9
 - Timing + checksum output is stable
+- Sensors.xml defines a scan frustum + schedule that can drive “tracks-in-scan-volume” queries
 
 Recommended next steps (minimal scope, maximum payoff)
 
@@ -15,66 +16,76 @@ Suggested fields (SoA arrays):
 - last_update_time_s[]  (double)
 - status[]              (enum: ACTIVE / COASTING / DROPPED)
 - quality[]             (float, optional)
-- x[]                   (state, batch-major: N x 9 doubles)
+- x[]                   (state, batch-major: N x 9 doubles; ECEF pos/vel/acc)
 - P[]                   (covariance, batch-major: N x 81 doubles; full 9×9 for now)
 
 Why:
-- Lets you implement hit/miss, aging, and scheduling policy without committing to a DB design yet.
-- Keeps the memory layout compatible with batched math kernels.
+- Enables hit/miss, aging, scheduling policy, and later DB interactions without changing memory layout.
+- Preserves contiguous buffers for batched math kernels.
 
 2) Generate synthetic tracks deterministically (ECEF) from config
 Goal: replace “load from DB” with deterministic “seeded generation” so performance tests are repeatable.
 Use TargetsGen config:
-- Position: uniform in ECEF box (from config Background/Local mixture)
-- Velocity/Acceleration: distributions from config (SpeedMps bands, etc.)
-- Covariance initialization: sigma ranges / simple diagonal to start
+- Position: ECEF (use ecef_box mixture for both Background and Local, as you validated)
+- Velocity/Acceleration: distributions from config
+- Covariance initialization: sigma ranges or diagonal (start simple)
 - last_update_time_s: use model (uniform_age / exponential_age / mixture_age)
 
 Why:
-- Gives you 10k–1M tracks quickly and reproducibly.
-- Provides realistic variability in age/covariance needed for later scheduling logic.
+- Lets you scale quickly to 10k–1M tracks reproducibly.
+- Produces the variability needed for update scheduling and later association testing.
 
-3) Add a scan-volume query stub (broadphase) that returns a candidate list
-Goal: mimic “get tracks in scan volume” without building SQLite/R*Tree yet.
-Implement a coarse ECEF grid index:
-- Choose cell size (e.g., 10–20 km cubes)
-- Compute CellKey from ECEF position (floor(x/cell), floor(y/cell), floor(z/cell))
-- Maintain unordered_map<CellKey, vector<track_index>>
-Query:
-- Given a scan volume around ownship (start with an ECEF sphere radius), enumerate intersecting cells
-- Return candidate indices (broadphase)
-
-Why:
-- Matches the broadphase→narrowphase pattern used in R-trees and spatial DBs.
-- Lets you build the rest of the pipeline while keeping the “query subset fast” requirement.
-
-4) Run the existing batch propagation on the returned subset only
-Goal: confirm the end-to-end “subset processing” pattern you’ll use with the real DB.
-Pipeline shape:
-- candidates = index.query(scan_volume)
-- gather: build contiguous x_batch / P_batch for candidates
-- propagate: run RW batched update (current fast kernel)
-- (later) gating + association here
-- scatter: write updated x/P back to global arrays
+3) Add a sensor-driven scan query planner (broadphase) that produces ECEF AABBs
+Goal: query tracks by where the sensor will be scanning next (driven by sensors.xml), without scanning the full DB.
+From sensors.xml, derive a lookahead set of dwells:
+- ScanRateHz → dwell period Tscan
+- For each dwell time t_scan:
+  - Use ownship ECEF position and attitude (R_ecef_from_body)
+  - Interpret scan frustum in OWNERSHIP_BODY (az/el/range min/max)
+  - Convert the frustum to a conservative ECEF AABB by sampling corner rays at r_min/r_max
+  - Inflate the AABB by QueryAabbInflateMeters
+Output per dwell:
+- t_scan
+- AABB in ECEF (minX/maxX/minY/maxY/minZ/maxZ)
+- (retain frustum params for fine filtering later)
 
 Why:
-- This is the core performance pattern: gather→compute→scatter, minimizing random access.
+- Broadphase query uses simple AABB overlap, which maps directly to grid hashing and SQLite R*Tree.
+- Keeps “sensor geometry math” out of the DB query stage.
+
+4) Implement broadphase→narrowphase subset processing using the planned scan AABB(s)
+Goal: validate the core runtime pattern you’ll reuse with a real DB/index.
+For each dwell (or union of a few dwells):
+- candidates = index.query(AABB_ecef)
+- gather: build contiguous x_batch / P_batch for candidate indices
+- propagate: run RW batched update (current fast kernel) to t_scan or dt
+- narrowphase filter (fine geometry):
+  - for candidates, compute relative vector and az/el/range in OWNERSHIP_BODY
+  - keep only those truly inside frustum
+- scatter: write updated x/P back to the global arrays
+
+Why:
+- This is the speed-critical pattern: AABB query → contiguous compute → scatter.
+- Narrowphase conversion to AER/az-el happens only on candidates, not on the full track set.
 
 5) Add timing breakdowns so optimization is guided by data
 Goal: see where time goes before expanding scope.
 Record timing for:
-- broadphase query
+- scan planner (AABB construction per dwell)
+- broadphase query (index/DB)
 - gather
 - propagate
+- narrowphase filter
 - scatter
 - total
 
 Why:
-- Helps you decide if you need: better indexing, better cache locality, larger batches, or parallelism changes.
+- Helps you decide if the next investment should be better indexing, better cache locality, larger batches, or parallel strategy.
 
 Next deliverable (once you’re ready)
 - Patch zip that adds:
   - TrackBatch (SoA)
-  - ECEF grid index (broadphase)
-  - main.cpp flow: generate→index→query→gather→propagate→scatter
+  - ScanVolumePlanner (reads sensors.xml and emits ECEF AABBs per dwell)
+  - A simple broadphase index (grid hash) that can later be swapped for SQLite R*Tree
+  - main.cpp flow: generate→index→plan scans→query→gather→propagate→filter→scatter
   - timing breakdown prints
