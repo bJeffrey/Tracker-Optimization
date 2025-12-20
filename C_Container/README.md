@@ -28,11 +28,14 @@ All backends implement the same batch‑covariance API (see `include/la.h`) and 
 ```
 include/
   la.h                # Common API definitions
+  config/             # Config system public headers (loader + parsed types)
 src/
   la_eigen.cpp        # Eigen backend (optional OpenMP)
   la_mkl.cpp          # Intel MKL backend (oneAPI)
   la_std.cpp          # Standard C++ backend
   main.cpp            # Demo driver (timed batch propagation)
+  config/             # Config loader implementation (internal helpers + loader)
+  config_check.cpp    # Config loader smoke-test executable (load + validate + print summary)
 CMakeLists.txt        # Unified CMake (C++17, OpenMP hints for Eigen)
 build.sh              # Smart build selector (auto/eigen/mkl/std) for direct-on-host builds
 Dockerfile            # Unified multi-stage docker build (eigen/std/mkl via BACKEND arg)
@@ -67,8 +70,12 @@ docker run --rm la-demo:std
 > Open an interactive shell inside an image (useful for debugging):
 >
 > ```bash
-> docker run --rm -it --entrypoint /bin/bash la-demo:eigen
+> docker run --rm -it la-demo:eigen /bin/bash
 > ```
+>
+> Notes:
+> - The unified Dockerfile uses `CMD ["demo"]` (not ENTRYPOINT), so passing `/bin/bash`
+>   works as expected without needing `--entrypoint`.
 
 ---
 
@@ -154,24 +161,52 @@ If you keep using the legacy workflow, the high-level steps remain:
 
 ---
 
-### Option C — Build dev for ease of development, then make quick changes in shell
+### Option C — Build a dev shell for rapid iteration, then run builds inside the container
 
-1) **Build the dev image**
+This is the workflow you want when you’re making **small code changes** frequently and want to avoid
+rebuilding full docker layers every time.
+
+1) **Build a dev image (build stage)**
 ```bash
-docker build -t la-dev:eigen --target build --build-arg BACKEND=eigen .
+docker build --target build -t la-dev:eigen-build --build-arg BACKEND=eigen .
 ```
 
-2) **Run container (from Powershell) and open to a bash shell**
-```bash
-docker run --rm -it --entrypoint /bin/bash -v ${PWD}:/src -w /src la-dev:eigen
+2) **Run container and open a bash shell**
+
+Windows PowerShell:
+```powershell
+docker run --rm -it -v ${PWD}:/src -w /src la-dev:eigen-build /bin/bash
 ```
 
-3) **Compile code**
-```bash
-cmake -S . -B build -G Ninja -DUSE_MKL=OFF -DUSE_STD=OFF
-cmake --build build -j
-./build/demo
+Windows CMD:
+```bat
+docker run --rm -it -v %cd%:/src -w /src la-dev:eigen-build /bin/bash
 ```
+
+Linux/macOS:
+```bash
+docker run --rm -it -v "$PWD":/src -w /src la-dev:eigen-build /bin/bash
+```
+
+3) **Compile inside the container**
+```bash
+mkdir -p build && cd build
+cmake -S .. -B . -G Ninja -DENABLE_CONFIG=ON
+ninja
+```
+
+4) **Run binaries inside the container**
+```bash
+./demo
+./config_check --config ../config/system.xml --xsd-dir ../config/schemas
+```
+
+Notes:
+- The **final runtime image** intentionally does **not** include `cmake`.
+- If you see `bash: cmake: command not found`, you are in the runtime image (or your dev image tag is wrong).
+  Use the `--target build` image/tag for compilation.
+
+---
 
 ## 📚 Doxygen Docs (Optional)
 
@@ -219,7 +254,7 @@ The HTML entry point (when generated) is typically:
 - Always use **`-DCMAKE_BUILD_TYPE=Release`** for meaningful timing (the CMake config defaults to Release if unspecified).  
 - Small matrices (e.g., 6×6 typical of many ESM states) can favor Eigen or even STD due to MKL dispatch overhead; MKL shines with larger `n` and large batch counts.  
 - The demo avoids `F P Fᵀ` when `F = I` for a realistic stationary ESM update path.  
-- If you need a shell in a built image: `docker run --rm -it --entrypoint /bin/bash la-demo:eigen`.
+- If you need a shell in a built image: `docker run --rm -it la-demo:eigen /bin/bash`.
 
 ---
 

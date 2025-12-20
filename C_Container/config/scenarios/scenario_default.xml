@@ -3,7 +3,7 @@
   <Scenario id="scenario_1m_ca9">
     <Name>1M Targets / CA9</Name>
 
-    <Refs baseDir="config">
+    <Refs baseDir="..">
       <Ownship href="entities/ownship_static.xml"/>
       <Targets sourceType="generator" href="targets/targets_gen_1m_ca9.xml"/>
     </Refs>

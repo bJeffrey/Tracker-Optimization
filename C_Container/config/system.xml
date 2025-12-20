@@ -10,7 +10,7 @@
     <Scenario id="scenario_1m_ca9"/>
   </Active>
 
-  <Refs baseDir="config">
+  <Refs baseDir=".">
     <RuntimeProfiles href="runtime_profiles.xml"/>
     <TrackerModel    href="tracker_model.xml"/>
     <Performance     href="performance.xml"/>

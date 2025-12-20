@@ -5,23 +5,26 @@
 
   <!-- Spatial distribution: mixture of background + local bubble around ownship -->
   <Mixture>
+
     <Background fraction="0.95">
-      <Model type="global_geodetic">
-        <AltitudeMeters model="mixture">
-          <Band fraction="0.70" min="0" max="3000"/>
-          <Band fraction="0.25" min="3000" max="12000"/>
-          <Band fraction="0.05" min="12000" max="18000"/>
-        </AltitudeMeters>
+      <Model type="ecef_box">
+        <EcefBox>
+          <MinMeters x="-6000000" y="-6000000" z="-6000000"/>
+          <MaxMeters x="6000000"  y="6000000"  z="6000000"/>
+        </EcefBox>
       </Model>
     </Background>
 
     <Local fraction="0.05">
-      <Model type="enu_bubble">
+      <Model type="ecef_box">
         <Center>ownship</Center>
-        <RadiusMeters>300000</RadiusMeters>
-        <AltitudeMeters model="uniform" min="0" max="18000"/>
+        <EcefBox>
+          <MinMeters x="-300000" y="-300000" z="-18000"/>
+          <MaxMeters x="300000"  y="300000"  z="18000"/>
+        </EcefBox>
       </Model>
     </Local>
+
   </Mixture>
 
   <Kinematics>

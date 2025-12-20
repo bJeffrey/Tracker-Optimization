@@ -22,6 +22,7 @@ option(USE_STD          "Use baseline std backend (no Eigen/MKL)" OFF)
 option(ENABLE_OPENMP    "Enable OpenMP (outer parallel loops)" ON)
 option(ENABLE_LTO       "Try Link-Time Optimization (IPO)"     ON)
 option(EIGEN_DONT_PAR   "Disable Eigen internal parallelism"   ON)  # keeps Eigen single-threaded; we parallel outside
+option(ENABLE_CONFIG    "Build XML config loader tools (libxml2)" ON)
 
 # ------------------------------
 # Library target
@@ -88,10 +89,46 @@ if (ENABLE_LTO)
 endif()
 
 # ------------------------------
-# Demo executable
+# Demo executable (existing)
 # ------------------------------
 add_executable(demo src/main.cpp)
 target_link_libraries(demo PRIVATE simple_la)
 if (ENABLE_LTO AND TARGET demo)
   set_property(TARGET demo PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
+# ------------------------------
+# Config loader tool (new): config_check
+# ------------------------------
+if (ENABLE_CONFIG)
+  message(STATUS "ENABLE_CONFIG=ON: building config_check with libxml2")
+
+  add_library(config_loader STATIC
+    src/config/config_loader.cpp
+    src/config/xml_utils.cpp
+    src/config/path_utils.cpp
+  )
+  target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(config_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+  # Prefer CMake's FindLibXml2; fallback to pkg-config if needed.
+  find_package(LibXml2 QUIET)
+  if (LibXml2_FOUND)
+    target_include_directories(config_loader PRIVATE ${LIBXML2_INCLUDE_DIR})
+    target_link_libraries(config_loader PRIVATE ${LIBXML2_LIBRARIES})
+    target_compile_definitions(config_loader PRIVATE HAVE_LIBXML2=1)
+  else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
+    target_include_directories(config_loader PRIVATE ${LIBXML2_INCLUDE_DIRS})
+    target_link_libraries(config_loader PRIVATE ${LIBXML2_LIBRARIES})
+    target_compile_definitions(config_loader PRIVATE HAVE_LIBXML2=1)
+  endif()
+
+  add_executable(config_check src/config_check.cpp)
+  target_link_libraries(config_check PRIVATE config_loader)
+
+  if (ENABLE_LTO AND TARGET config_check)
+    set_property(TARGET config_check PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  endif()
 endif()
