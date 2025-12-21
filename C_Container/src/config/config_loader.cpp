@@ -149,8 +149,6 @@ static PerformanceCfg parse_performance(void* doc) {
   return p;
 }
 
-
-
 static SensorsCfg parse_sensors(const std::string& sensors_xml,
                                 const std::string& xsd_dir) {
   SensorsCfg out{};
@@ -159,33 +157,39 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
     return out;
   }
 
-  void* doc_void = nullptr;
-  try {
-    doc_void = cfg::xmlu::ReadXmlDocOrThrow(sensors_xml);
-    validate_if_enabled(doc_void, xsd_dir, sensors_xml);
-  } catch (...) {
-    if (doc_void) cfg::xmlu::FreeXmlDoc(doc_void);
-    throw;
-  }
+  // ---- Load + validate ----
+  void* doc_void = cfg::xmlu::ReadXmlDocOrThrow(sensors_xml);
+  struct DocGuard {
+    void* d = nullptr;
+    ~DocGuard() { if (d) cfg::xmlu::FreeXmlDoc(d); }
+  } guard{doc_void};
+
+  validate_if_enabled(doc_void, xsd_dir, sensors_xml);
 
   auto* doc = reinterpret_cast<xmlDocPtr>(doc_void);
   xmlNodePtr root = xmlDocGetRootElement(doc);
   if (!root) {
-    cfg::xmlu::FreeXmlDoc(doc_void);
     throw std::runtime_error("Sensors XML has no root element: " + sensors_xml);
   }
 
   auto node_name_eq = [](xmlNodePtr n, const char* name) -> bool {
-    return n && n->type == XML_ELEMENT_NODE && n->name && (std::string(reinterpret_cast<const char*>(n->name)) == name);
+    return n && n->type == XML_ELEMENT_NODE && n->name &&
+           (std::string(reinterpret_cast<const char*>(n->name)) == name);
   };
 
   auto get_attr = [](xmlNodePtr n, const char* attr) -> std::string {
     if (!n) return {};
     xmlChar* v = xmlGetProp(n, reinterpret_cast<const xmlChar*>(attr));
     if (!v) return {};
-    std::string out(reinterpret_cast<const char*>(v));
+    std::string out_s(reinterpret_cast<const char*>(v));
     xmlFree(v);
-    return out;
+    return out_s;
+  };
+
+  auto trim_in_place = [](std::string& s) {
+    auto is_ws = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) s.pop_back();
   };
 
   auto child_text = [&](xmlNodePtr parent, const char* child_name) -> std::string {
@@ -195,10 +199,7 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
         xmlChar* txt = xmlNodeGetContent(c);
         std::string s = txt ? reinterpret_cast<const char*>(txt) : "";
         if (txt) xmlFree(txt);
-        // trim
-        auto is_ws = [](unsigned char ch){ return std::isspace(ch) != 0; };
-        while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
-        while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) s.pop_back();
+        trim_in_place(s);
         return s;
       }
     }
@@ -219,7 +220,10 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
     return nullptr;
   };
 
-  auto child_attr_double = [&](xmlNodePtr parent, const char* child_name, const char* attr, double def) -> double {
+  auto child_attr_double = [&](xmlNodePtr parent,
+                               const char* child_name,
+                               const char* attr,
+                               double def) -> double {
     xmlNodePtr c = find_child(parent, child_name);
     if (!c) return def;
     std::string s = get_attr(c, attr);
@@ -227,7 +231,7 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
     try { return std::stod(s); } catch (...) { return def; }
   };
 
-  // Iterate <Sensor id="..."> nodes
+  // ---- Iterate <Sensor id="..."> ----
   for (xmlNodePtr n = root->children; n; n = n->next) {
     if (!node_name_eq(n, "Sensor")) continue;
 
@@ -240,26 +244,56 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
       s.scan.frame = child_text(scan, "Frame");
       s.scan.query_aabb_inflate_m = child_double(scan, "QueryAabbInflateMeters", 0.0);
 
+      bool have_frustum = false;
+
+      // Frustum (optional)
       if (xmlNodePtr fr = find_child(scan, "Frustum")) {
-        s.scan.frustum.az_min_deg = child_attr_double(fr, "AzimuthDeg", "min", 0.0);
-        s.scan.frustum.az_max_deg = child_attr_double(fr, "AzimuthDeg", "max", 0.0);
+        // Each of these elements is optional per XSD, so default safely to 0.
+        s.scan.frustum.az_min_deg = child_attr_double(fr, "AzimuthDeg",   "min", 0.0);
+        s.scan.frustum.az_max_deg = child_attr_double(fr, "AzimuthDeg",   "max", 0.0);
         s.scan.frustum.el_min_deg = child_attr_double(fr, "ElevationDeg", "min", 0.0);
         s.scan.frustum.el_max_deg = child_attr_double(fr, "ElevationDeg", "max", 0.0);
-        s.scan.frustum.r_min_m = child_attr_double(fr, "RangeMeters", "min", 0.0);
-        s.scan.frustum.r_max_m = child_attr_double(fr, "RangeMeters", "max", 0.0);
+        s.scan.frustum.r_min_m    = child_attr_double(fr, "RangeMeters",  "min", 0.0);
+        s.scan.frustum.r_max_m    = child_attr_double(fr, "RangeMeters",  "max", 0.0);
+
+        // Consider frustum “present” if any bounds were explicitly provided or r_max > 0.
+        have_frustum = (s.scan.frustum.r_max_m > 0.0) ||
+                       (s.scan.frustum.az_min_deg != 0.0) || (s.scan.frustum.az_max_deg != 0.0) ||
+                       (s.scan.frustum.el_min_deg != 0.0) || (s.scan.frustum.el_max_deg != 0.0) ||
+                       (s.scan.frustum.r_min_m    != 0.0);
+      }
+
+      // Sphere (optional) — XSD: <Sphere><RangeMeters>PositiveDouble</RangeMeters></Sphere>
+      // If Sphere is provided and Frustum is missing/empty, convert to an “all-angles” frustum
+      // so downstream AABB generation stays well-defined.
+      if (!have_frustum) {
+        if (xmlNodePtr sphere = find_child(scan, "Sphere")) {
+          const double r = child_double(sphere, "RangeMeters", 0.0);
+          if (r > 0.0) {
+            s.scan.frustum.az_min_deg = -180.0;
+            s.scan.frustum.az_max_deg =  180.0;
+            s.scan.frustum.el_min_deg =  -90.0;
+            s.scan.frustum.el_max_deg =   90.0;
+            s.scan.frustum.r_min_m    =    0.0;
+            s.scan.frustum.r_max_m    =      r;
+          }
+        }
       }
     }
 
     // Schedule (optional)
     if (xmlNodePtr sched = find_child(n, "Schedule")) {
+      // XSD location: Schedule/ScanRateHz
       s.scan_rate_hz = child_double(sched, "ScanRateHz", 0.0);
+
+      // XSD also allows Schedule/ScanEvents/Event/TimeSeconds.
+      // Config types don’t currently store them, so we intentionally ignore for now.
     }
 
     out.sensors.push_back(std::move(s));
   }
 
-  cfg::xmlu::FreeXmlDoc(doc_void);
-  return out;
+  return out; // DocGuard frees
 }
 
 
@@ -370,7 +404,15 @@ ConfigBundle ConfigLoader::Load(const std::string& system_xml_path, const std::s
   bundle.paths.tracker_model_xml    = pathu::ResolveHref(bundle.paths.system_xml, base, bundle.system.refs.tracker_model_href);
   bundle.paths.store_xml            = pathu::ResolveHref(bundle.paths.system_xml, base, bundle.system.refs.store_href);
   bundle.paths.scenario_xml         = pathu::ResolveHref(bundle.paths.system_xml, base, bundle.system.refs.scenario_file_href);
-
+  
+  if (!bundle.system.refs.sensors_href.empty()) {
+    bundle.paths.sensors_xml = pathu::ResolveHref(bundle.paths.system_xml, base, bundle.system.refs.sensors_href);
+  }
+  // Optional but consistent with system.xml having it:
+  if (!bundle.system.refs.gating_assoc_href.empty()) {
+    bundle.paths.gating_assoc_xml = pathu::ResolveHref(bundle.paths.system_xml, base, bundle.system.refs.gating_assoc_href);
+  }
+ 
   if (!bundle.system.refs.performance_href.empty())
     bundle.paths.performance_xml    = pathu::ResolveHref(bundle.paths.system_xml, base, bundle.system.refs.performance_href);
   if (!bundle.system.refs.persistence_href.empty())

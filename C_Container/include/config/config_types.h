@@ -279,6 +279,7 @@ struct ResolvedPaths {
   std::string tracker_model_xml;
   std::string performance_xml;   // optional
   std::string sensors_xml;       // optional
+  std::string gating_assoc_xml;  // optional
   std::string store_xml;
   std::string persistence_xml;   // optional
   std::string scenario_xml;

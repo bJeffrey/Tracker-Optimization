@@ -33,6 +33,7 @@ static void print_bundle(const cfg::ConfigBundle& b) {
   std::cout << "  tracker_model:    " << b.paths.tracker_model_xml << "\n";
   if (!b.paths.performance_xml.empty()) std::cout << "  performance:      " << b.paths.performance_xml << "\n";
   if (!b.paths.sensors_xml.empty())     std::cout << "  sensors:          " << b.paths.sensors_xml << "\n";
+  if (!b.paths.gating_assoc_xml.empty()) std::cout << "  gating_assoc:     " << b.paths.gating_assoc_xml << "\n";
   std::cout << "  store:            " << b.paths.store_xml << "\n";
   if (!b.paths.persistence_xml.empty()) std::cout << "  persistence:      " << b.paths.persistence_xml << "\n";
   std::cout << "  scenario:         " << b.paths.scenario_xml << "\n";
