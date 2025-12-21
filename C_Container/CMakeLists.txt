@@ -112,8 +112,8 @@ if (ENABLE_CONFIG)
     src/config/path_utils.cpp
   )
   target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  #target_include_directories(config_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-  target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_include_directories(config_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  #target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
   # Prefer CMake's FindLibXml2; fallback to pkg-config if needed.
   find_package(LibXml2 QUIET)
