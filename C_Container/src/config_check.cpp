@@ -9,6 +9,15 @@
 #include <iostream>
 #include <string>
 
+static const char* sensor_type_to_text(cfg::SensorType t) {
+  switch (t) {
+    case cfg::SensorType::RADAR: return "RADAR";
+    case cfg::SensorType::ESM:   return "ESM";
+    case cfg::SensorType::EOIR:  return "EOIR";
+    default:                     return "UNKNOWN";
+  }
+}
+
 static void print_bundle(const cfg::ConfigBundle& b) {
   std::cout << "=== ConfigBundle Summary ===\n";
   std::cout << "system.xml: " << b.paths.system_xml << "\n";
@@ -23,6 +32,7 @@ static void print_bundle(const cfg::ConfigBundle& b) {
   std::cout << "  runtime_profiles: " << b.paths.runtime_profiles_xml << "\n";
   std::cout << "  tracker_model:    " << b.paths.tracker_model_xml << "\n";
   if (!b.paths.performance_xml.empty()) std::cout << "  performance:      " << b.paths.performance_xml << "\n";
+  if (!b.paths.sensors_xml.empty())     std::cout << "  sensors:          " << b.paths.sensors_xml << "\n";
   std::cout << "  store:            " << b.paths.store_xml << "\n";
   if (!b.paths.persistence_xml.empty()) std::cout << "  persistence:      " << b.paths.persistence_xml << "\n";
   std::cout << "  scenario:         " << b.paths.scenario_xml << "\n";
@@ -53,19 +63,37 @@ static void print_bundle(const cfg::ConfigBundle& b) {
   std::cout << "  targets_sourceType=" << b.scenario.refs.targets_source_type
             << " targets_href=" << b.scenario.refs.targets_href << "\n\n";
 
+  if (b.has_sensors) {
+    std::cout << "[Sensors]\n";
+    std::cout << "  count=" << b.sensors.sensors.size() << "\n";
+    for (const auto& s : b.sensors.sensors) {
+      std::cout << "  - id=" << s.id
+                << " type=" << sensor_type_to_text(s.type)
+                << " frame=" << s.scan.frame
+                << " frustum(az=" << s.scan.frustum.az_min_deg << ".." << s.scan.frustum.az_max_deg
+                << " el=" << s.scan.frustum.el_min_deg << ".." << s.scan.frustum.el_max_deg
+                << " r=" << s.scan.frustum.r_min_m << ".." << s.scan.frustum.r_max_m << ")"
+                << " inflate_m=" << s.scan.query_aabb_inflate_m
+                << " rate_hz=" << s.scan_rate_hz
+                << "\n";
+    }
+    std::cout << "\n";
+  }
+
   std::cout << "[Ownship]\n";
   std::cout << "  frame=" << b.ownship.frame
             << " pos=(" << b.ownship.pos_x << "," << b.ownship.pos_y << "," << b.ownship.pos_z << ")\n";
   if (b.ownship.has_vel) {
     std::cout << "  vel=(" << b.ownship.vel_x << "," << b.ownship.vel_y << "," << b.ownship.vel_z << ")\n";
   }
+
   std::cout << "\n[TargetsGen]\n";
   std::cout << "  count=" << b.targets_gen.count << " seed=" << b.targets_gen.seed << "\n";
 }
 
 int main(int argc, char** argv) {
   std::string system_xml = "config/system.xml";
-  std::string xsd_dir = ""; // e.g., "config/schemas"
+  std::string xsd_dir = ""; // e.g., "./schemas"
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];

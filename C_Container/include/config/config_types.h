@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cfg {
@@ -86,10 +87,10 @@ struct ProcessModel {
 };
 
 struct CovarianceCfg {
-  std::string storage;         // "upper_tri_45" etc.
-  bool symmetrize_on_write = false;   // optional
-  double min_eig_clamp = 0.0;         // optional
-  bool store_cholesky = false;        // optional
+  std::string storage;              // "upper_tri_45" etc.
+  bool symmetrize_on_write = false; // optional
+  double min_eig_clamp = 0.0;       // optional
+  bool store_cholesky = false;      // optional
 };
 
 struct TrackerModel {
@@ -107,22 +108,73 @@ struct EnvVar {
 };
 
 struct ThreadsCfg {
-  int default_omp_threads = 0;     // optional
-  bool allow_env_override = true;  // optional
-  bool set_env_defaults_if_unset = true; // optional
+  int default_omp_threads = 0;            // optional
+  bool allow_env_override = true;         // optional
+  bool set_env_defaults_if_unset = true;  // optional
 };
 
 struct DiagnosticsCfg {
-  bool print_startup_summary = true; // optional
-  bool print_store_stats = false;    // optional
-  bool print_timing_stats = false;   // optional
+  bool print_startup_summary = true;  // optional
+  bool print_store_stats = false;     // optional
+  bool print_timing_stats = false;    // optional
 };
 
 struct PerformanceCfg {
   ThreadsCfg threads{};
   std::vector<EnvVar> env_defaults;
   DiagnosticsCfg diagnostics{};
+}; // <-- FIX: close PerformanceCfg
+
+// ------------------------------
+// Sensors (sensors.xml)
+// ------------------------------
+enum class SensorType {
+  RADAR,
+  ESM,
+  EOIR,
+  UNKNOWN
 };
+
+inline SensorType SensorTypeFromText(const std::string& s) {
+  if (s == "RADAR") return SensorType::RADAR;
+  if (s == "ESM")   return SensorType::ESM;
+  if (s == "EOIR")  return SensorType::EOIR;
+  return SensorType::UNKNOWN;
+}
+
+struct ScanFrustumCfg {
+  // Degrees and meters; interpreted in the declared ScanVolume frame.
+  double az_min_deg = 0.0;
+  double az_max_deg = 0.0;
+  double el_min_deg = 0.0;
+  double el_max_deg = 0.0;
+  double r_min_m = 0.0;
+  double r_max_m = 0.0;
+};
+
+struct ScanVolumeCfg {
+  std::string frame;               // e.g., "OWNERSHIP_BODY"
+  ScanFrustumCfg frustum{};
+  double query_aabb_inflate_m = 0.0; // inflate ECEF AABB for coarse DB query
+};
+
+struct SensorCfg {
+  std::string id;
+  SensorType type = SensorType::UNKNOWN;
+  ScanVolumeCfg scan{};
+  double scan_rate_hz = 0.0;  // schedule hint
+};
+
+struct SensorsCfg {
+  std::vector<SensorCfg> sensors;
+
+  const SensorCfg* FindById(const std::string& id) const {
+    for (const auto& s : sensors) {
+      if (s.id == id) return &s;
+    }
+    return nullptr;
+  }
+}; // <-- FIX: do NOT close namespace here
 
 // ------------------------------
 // Store (store.xml)
@@ -137,16 +189,16 @@ struct SqliteCfg {
 };
 
 struct RTreeCfg {
-  double padding_m = 0.0;            // optional
-  double rebuild_interval_s = 0.0;   // optional
+  double padding_m = 0.0;          // optional
+  double rebuild_interval_s = 0.0; // optional
 };
 
 struct StoreProfile {
   std::string id;
-  std::string mode;      // HOT_ONLY / HOT_PLUS_WARM
-  std::string backend;   // SQLITE_RTREE / RAM_NATIVE
-  SqliteCfg sqlite{};    // optional depending on backend
-  RTreeCfg rtree{};      // optional depending on backend
+  std::string mode;     // HOT_ONLY / HOT_PLUS_WARM
+  std::string backend;  // SQLITE_RTREE / RAM_NATIVE
+  SqliteCfg sqlite{};   // optional depending on backend
+  RTreeCfg rtree{};     // optional depending on backend
 };
 
 struct StoreCfg {
@@ -157,11 +209,11 @@ struct StoreCfg {
 // Persistence (persistence.xml)
 // ------------------------------
 struct SnapshotsCfg {
-  bool enabled = false;          // optional
-  double interval_s = 0.0;       // optional
-  std::string directory;         // optional
-  int retain_count = 0;          // optional
-  std::string compression;       // optional ("none","zstd"...)
+  bool enabled = false;              // optional
+  double interval_s = 0.0;           // optional
+  std::string directory;             // optional
+  int retain_count = 0;              // optional
+  std::string compression;           // optional ("none","zstd"...)
   bool snapshot_on_shutdown = false; // optional
   bool snapshot_on_signal = false;   // optional
 };
@@ -188,7 +240,7 @@ struct ScenarioRefs {
 
 struct LoadPolicy {
   std::string if_db_populated_action; // optional
-  std::vector<std::pair<std::string,std::string>> on_cli_flags; // (name, action)
+  std::vector<std::pair<std::string, std::string>> on_cli_flags; // (name, action)
 };
 
 struct Scenario {
@@ -226,6 +278,7 @@ struct ResolvedPaths {
   std::string runtime_profiles_xml;
   std::string tracker_model_xml;
   std::string performance_xml;   // optional
+  std::string sensors_xml;       // optional
   std::string store_xml;
   std::string persistence_xml;   // optional
   std::string scenario_xml;
@@ -242,6 +295,9 @@ struct ConfigBundle {
 
   PerformanceCfg performance;   // default-initialized if not present
   bool has_performance = false;
+
+  SensorsCfg sensors;           // default-initialized if not present
+  bool has_sensors = false;
 
   StoreProfile store_profile;
 

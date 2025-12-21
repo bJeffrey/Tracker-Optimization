@@ -16,6 +16,8 @@
 
 #include "config/config_loader.h"
 #include "targets/targets_generator.h"
+#include "index/rtree_sqlite.h"
+#include "index/scan_volume.h"
 #include "track_batch.h"
 
 #include <algorithm>
@@ -66,7 +68,7 @@ int main(int argc, char** argv) try {
   const bool gen_only = has_flag(argc, argv, "--gen-only");
   const bool no_gen   = has_flag(argc, argv, "--no-gen");
 
-  // Load config (with schema validation)
+  // Load config (with optional schema validation depending on xsd_dir)
   const cfg::ConfigBundle cfg = cfg::ConfigLoader::Load(system_xml, xsd_dir);
 
   const int n = cfg.tracker_model.state.dim;
@@ -84,8 +86,11 @@ int main(int argc, char** argv) try {
   const double dt_s = 1.0 / cfg.runtime.update_rate_hz;
 
   // Batch size: default to max active tracks, allow CLI override.
-  const std::size_t batch = arg_size_t(argc, argv, "--tracks",
-                                       static_cast<std::size_t>(std::max(0, cfg.runtime.max_tracks_active)));
+  const std::size_t batch = arg_size_t(
+      argc,
+      argv,
+      "--tracks",
+      static_cast<std::size_t>(std::max(0, cfg.runtime.max_tracks_active)));
 
   if (batch == 0) {
     std::cerr << "ERROR: batch size is 0.\n";
@@ -113,14 +118,15 @@ int main(int argc, char** argv) try {
 
   const double q_pos = 1.0;   // (m^2)/s
   const double q_vel = 0.1;   // (m/s)^2 / s
-  const double q_acc = (cfg.tracker_model.process.noise.sigma_accel_mps2 > 0.0)
-                         ? (cfg.tracker_model.process.noise.sigma_accel_mps2 *
-                            cfg.tracker_model.process.noise.sigma_accel_mps2)
-                         : 0.01; // (m/s^2)^2 / s
+  const double q_acc =
+      (cfg.tracker_model.process.noise.sigma_accel_mps2 > 0.0)
+          ? (cfg.tracker_model.process.noise.sigma_accel_mps2 *
+             cfg.tracker_model.process.noise.sigma_accel_mps2)
+          : 0.01; // (m/s^2)^2 / s
 
-  for (int k = 0; k < 3; ++k) Q[(k+0) * n + (k+0)] = q_pos; // x,y,z
-  for (int k = 0; k < 3; ++k) Q[(k+3) * n + (k+3)] = q_vel; // vx,vy,vz
-  for (int k = 0; k < 3; ++k) Q[(k+6) * n + (k+6)] = q_acc; // ax,ay,az
+  for (int k = 0; k < 3; ++k) Q[(k + 0) * n + (k + 0)] = q_pos; // x,y,z
+  for (int k = 0; k < 3; ++k) Q[(k + 3) * n + (k + 3)] = q_vel; // vx,vy,vz
+  for (int k = 0; k < 3; ++k) Q[(k + 6) * n + (k + 6)] = q_acc; // ax,ay,az
 
   // Propagate unless --gen-only
   double prop_s = 0.0;
@@ -134,11 +140,53 @@ int main(int argc, char** argv) try {
   std::cout << "Config: " << system_xml << "\n";
   std::cout << "XSD:    " << xsd_dir << "\n";
   std::cout << "dim=" << n << " tracks=" << batch << " dt_s=" << dt_s << "\n";
+
   if (!no_gen) {
     std::cout << "Generation time: " << gen_s << " s (targets_xml=" << cfg.paths.targets_xml << ")\n";
   } else {
     std::cout << "Generation skipped (--no-gen)\n";
   }
+
+  // ------------------------------------------------------------
+  // Step 3 (scan-driven coarse query): build a fast 3D R-Tree index
+  // of track positions (ECEF) and query by the sensor scan volume.
+  //
+  // Notes:
+  // - Tracks are stored in ECEF.
+  // - sensors.xml expresses the scan volume in a frame relative to ownship.
+  //   For now we interpret OWNERSHIP_BODY as a local tangent ENU frame at the
+  //   ownship location (no yaw/pitch/roll). We'll add full body attitude later.
+  // - This is a *coarse* candidate query (AABB). Fine gating/association still
+  //   happens downstream.
+  // ------------------------------------------------------------
+  if (cfg.has_sensors && !cfg.sensors.sensors.empty()) {
+    const cfg::SensorCfg& sensor = cfg.sensors.sensors.front();
+
+    idx::EcefAabb scan_aabb = idx::ComputeScanAabbEcefApprox(sensor, cfg.ownship);
+
+    idx::SqliteRTreeIndex rtree;
+
+    // TrackBatch stores interleaved state: [x y z vx vy vz ax ay az] per track
+    rtree.BuildFromInterleavedXYZ(
+        tb.x.data(),
+        tb.n_tracks,
+        static_cast<std::size_t>(TrackBatch::kDim),
+        /*x_off=*/0,
+        /*y_off=*/1,
+        /*z_off=*/2);
+
+    const auto ids = rtree.QueryAabb(scan_aabb);
+
+    std::cout << "Scan-driven coarse query:\n";
+    std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
+              << " inflate_m=" << sensor.scan.query_aabb_inflate_m << "\n";
+    std::cout << "  aabb.min=(" << scan_aabb.min_x << "," << scan_aabb.min_y << "," << scan_aabb.min_z << ")\n";
+    std::cout << "  aabb.max=(" << scan_aabb.max_x << "," << scan_aabb.max_y << "," << scan_aabb.max_z << ")\n";
+    std::cout << "  candidates=" << ids.size() << " / " << tb.n_tracks << "\n\n";
+  } else {
+    std::cout << "Scan-driven coarse query: skipped (no sensors loaded)\n\n";
+  }
+
   if (!gen_only) {
     std::cout << "RW batch propagation time: " << prop_s
               << " s, checksum " << checksum(tb.P) << "\n";
@@ -147,6 +195,7 @@ int main(int argc, char** argv) try {
   }
 
   return 0;
+
 } catch (const std::exception& e) {
   std::cerr << "FATAL: " << e.what() << "\n";
   return 1;

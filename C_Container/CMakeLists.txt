@@ -113,7 +113,6 @@ if (ENABLE_CONFIG)
   )
   target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_include_directories(config_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-  #target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
   # Prefer CMake's FindLibXml2; fallback to pkg-config if needed.
   find_package(LibXml2 QUIET)
@@ -141,6 +140,19 @@ else()
   message(WARNING "ENABLE_CONFIG=OFF: config loader tools will not be built.")
 endif()
 
+
+# ------------------------------
+# Track spatial index (SQLite RTree) for coarse scan-volume queries
+# ------------------------------
+find_package(SQLite3 REQUIRED)
+
+add_library(track_index STATIC
+  src/index/rtree_sqlite.cpp
+  src/index/scan_volume.cpp
+)
+target_include_directories(track_index PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(track_index PUBLIC SQLite::SQLite3)
+
 # ------------------------------
 # Demo executable (config-driven)
 # ------------------------------
@@ -148,7 +160,7 @@ add_executable(demo
   src/main.cpp
   src/targets/targets_generator.cpp
 )
-target_link_libraries(demo PRIVATE simple_la)
+target_link_libraries(demo PRIVATE simple_la track_index)
 
 # demo now depends on the XML config loader
 if (ENABLE_CONFIG)
