@@ -7,20 +7,21 @@
  *
  *   P_i <- P_i + (Q_per_sec * dt)
  *
- * Notes:
- *  - This is intentionally the "fast path" (F = I), which is what our Matrix Optimization work
- *    has focused on first. A full CA/CV FPF^T + Q path can be layered in later.
- *  - For now we intentionally allocate/store full 9x9 (81 doubles) per track.
+ * Step 2 integration:
+ *  - Generate deterministic synthetic ECEF tracks from targets_gen_*.xml into TrackBatch.
+ *  - Allow separating generation timing from propagation timing.
  */
 
 #include "la_batch_rw.h"
 
 #include "config/config_loader.h"
+#include "targets/targets_generator.h"
+#include "track_batch.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
-#include <cstring>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -37,6 +38,13 @@ std::string arg_value(int argc, char** argv, const std::string& key, const std::
   return def;
 }
 
+bool has_flag(int argc, char** argv, const std::string& key) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == key) return true;
+  }
+  return false;
+}
+
 std::size_t arg_size_t(int argc, char** argv, const std::string& key, std::size_t def) {
   const std::string s = arg_value(argc, argv, key, "");
   if (s.empty()) return def;
@@ -44,7 +52,6 @@ std::size_t arg_size_t(int argc, char** argv, const std::string& key, std::size_
 }
 
 double checksum(const std::vector<double>& v) {
-  // A stable-ish checksum to sanity-check backend parity.
   long double acc = 0.0L;
   for (double x : v) acc += static_cast<long double>(x);
   return static_cast<double>(acc);
@@ -56,12 +63,16 @@ int main(int argc, char** argv) try {
   const std::string system_xml = arg_value(argc, argv, "--config",  "./config/system.xml");
   const std::string xsd_dir    = arg_value(argc, argv, "--xsd-dir", "./schemas");
 
+  const bool gen_only = has_flag(argc, argv, "--gen-only");
+  const bool no_gen   = has_flag(argc, argv, "--no-gen");
+
   // Load config (with schema validation)
   const cfg::ConfigBundle cfg = cfg::ConfigLoader::Load(system_xml, xsd_dir);
 
   const int n = cfg.tracker_model.state.dim;
-  if (n != 9) {
-    std::cerr << "ERROR: This integration step expects dim=9 for now (got dim=" << n << ").\n";
+  if (n != TrackBatch::kDim) {
+    std::cerr << "ERROR: This demo expects dim=" << TrackBatch::kDim
+              << " for now (got dim=" << n << ").\n";
     return 2;
   }
 
@@ -81,21 +92,25 @@ int main(int argc, char** argv) try {
     return 2;
   }
 
-  // Allocate full 9x9 P per track (row-major)
-  const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
-  std::vector<double> P(batch * nn, 0.0);
+  TrackBatch tb;
+  tb.resize(batch);
 
-  // Simple initial covariance: 100*I
-  for (std::size_t i = 0; i < batch; ++i) {
-    double* Pi = P.data() + i * nn;
-    for (int d = 0; d < n; ++d) {
-      Pi[d * n + d] = 100.0;
-    }
+  // ------------------------------
+  // Step 2: deterministic target generation (ECEF CA9)
+  // ------------------------------
+  double gen_s = 0.0;
+  if (!no_gen) {
+    const auto g0 = std::chrono::high_resolution_clock::now();
+    targets::GenerateFromXml(cfg.paths.targets_xml, cfg.paths.xsd_dir, cfg.ownship, tb);
+    const auto g1 = std::chrono::high_resolution_clock::now();
+    gen_s = std::chrono::duration<double>(g1 - g0).count();
   }
 
   // Define a simple Q_per_sec (row-major) consistent with a CA9 state ordering.
   // For now: diagonal with different scales for pos/vel/acc blocks.
+  const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
   std::vector<double> Q(nn, 0.0);
+
   const double q_pos = 1.0;   // (m^2)/s
   const double q_vel = 0.1;   // (m/s)^2 / s
   const double q_acc = (cfg.tracker_model.process.noise.sigma_accel_mps2 > 0.0)
@@ -107,17 +122,29 @@ int main(int argc, char** argv) try {
   for (int k = 0; k < 3; ++k) Q[(k+3) * n + (k+3)] = q_vel; // vx,vy,vz
   for (int k = 0; k < 3; ++k) Q[(k+6) * n + (k+6)] = q_acc; // ax,ay,az
 
-  // Time the propagation
-  const auto t0 = std::chrono::high_resolution_clock::now();
-  la::rw_add_qdt_batch(P.data(), Q.data(), dt_s, n, batch);
-  const auto t1 = std::chrono::high_resolution_clock::now();
-  const std::chrono::duration<double> dt = t1 - t0;
+  // Propagate unless --gen-only
+  double prop_s = 0.0;
+  if (!gen_only) {
+    const auto t0 = std::chrono::high_resolution_clock::now();
+    la::rw_add_qdt_batch(tb.P.data(), Q.data(), dt_s, n, batch);
+    const auto t1 = std::chrono::high_resolution_clock::now();
+    prop_s = std::chrono::duration<double>(t1 - t0).count();
+  }
 
   std::cout << "Config: " << system_xml << "\n";
   std::cout << "XSD:    " << xsd_dir << "\n";
   std::cout << "dim=" << n << " tracks=" << batch << " dt_s=" << dt_s << "\n";
-  std::cout << "RW batch propagation time: " << dt.count()
-            << " s, checksum " << checksum(P) << "\n";
+  if (!no_gen) {
+    std::cout << "Generation time: " << gen_s << " s (targets_xml=" << cfg.paths.targets_xml << ")\n";
+  } else {
+    std::cout << "Generation skipped (--no-gen)\n";
+  }
+  if (!gen_only) {
+    std::cout << "RW batch propagation time: " << prop_s
+              << " s, checksum " << checksum(tb.P) << "\n";
+  } else {
+    std::cout << "Propagation skipped (--gen-only)\n";
+  }
 
   return 0;
 } catch (const std::exception& e) {
