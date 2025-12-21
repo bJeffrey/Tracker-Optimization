@@ -19,7 +19,7 @@ single API. The primary container workflow is now based on a **single unified `D
 | **STD** | None | Pure C++ baseline; minimal deps; predictable | `--build-arg BACKEND=std` |
 
 All backends implement the same batch‑covariance API (see `include/la.h`) and the demo in
-`src/main.cpp` times a Δt‑scaled random‑walk covariance update across many tracks.
+`src/main.cpp` runs a Δt‑scaled random‑walk covariance update across many tracks.
 
 ---
 
@@ -33,9 +33,16 @@ src/
   la_eigen.cpp        # Eigen backend (optional OpenMP)
   la_mkl.cpp          # Intel MKL backend (oneAPI)
   la_std.cpp          # Standard C++ backend
-  main.cpp            # Demo driver (timed batch propagation)
+  la_batch_rw_*.cpp   # Backend-selected fast RW batch update (full 9x9 for CA9)
+  targets/            # Target generation utilities (config-driven)
+  main.cpp            # Demo driver (config-driven + timed batch propagation)
   config/             # Config loader implementation (internal helpers + loader)
   config_check.cpp    # Config loader smoke-test executable (load + validate + print summary)
+config/
+  system.xml          # Root config entry point (refs + active profile selection)
+  *.xml               # Other config modules (sensors, store, etc.)
+schemas/
+  *.xsd               # XSD pack used for validation
 CMakeLists.txt        # Unified CMake (C++17, OpenMP hints for Eigen)
 build.sh              # Smart build selector (auto/eigen/mkl/std) for direct-on-host builds
 Dockerfile            # Unified multi-stage docker build (eigen/std/mkl via BACKEND arg)
@@ -79,6 +86,40 @@ docker run --rm la-demo:std
 
 ---
 
+## 🧪 Run Command Options (Demo + Config Validation)
+
+These are the commands you’ll use most often while iterating on config + performance.
+
+### 1) Demo (config-driven propagation timing)
+
+From repo root (host or inside a dev container), after building:
+
+```bash
+./build/demo --config ./config/system.xml --xsd-dir ./schemas
+```
+
+Typical output includes:
+- resolved config bundle summary
+- `dim`, `tracks`, `dt_s`
+- generation timing (if generation is enabled in the scenario)
+- RW batch propagation timing + checksum
+
+### 2) Config-only smoke test (load + validate + print summary)
+
+```bash
+./build/config_check --config ./config/system.xml --xsd-dir ./schemas
+```
+
+This is the fastest way to verify:
+- XML href resolution
+- XSD validation
+- which “Active” IDs are being selected
+- resolved paths (scenario, ownship, targets, etc.)
+
+> Tip: if you’re unsure what flags exist for a binary, run it with `--help` (if implemented).
+
+---
+
 ## 🧰 Build Directly on a Linux Host (no Docker)
 
 The helper script can auto‑detect CPU vendor (Intel → MKL, else Eigen). You can override it.
@@ -97,7 +138,7 @@ chmod +x build.sh
 
 Run the demo:
 ```bash
-cd build && ./demo
+cd build && ./demo --config ../config/system.xml --xsd-dir ../schemas
 ```
 
 > If you’re not on RHEL/CentOS, you may need to install equivalent packages
@@ -190,15 +231,14 @@ docker run --rm -it -v "$PWD":/src -w /src la-dev:eigen-build /bin/bash
 
 3) **Compile inside the container**
 ```bash
-mkdir -p build && cd build
-cmake -S .. -B . -G Ninja -DENABLE_CONFIG=ON
-ninja
+cmake -S . -B build -G Ninja -DENABLE_CONFIG=ON
+cmake --build build -j
 ```
 
 4) **Run binaries inside the container**
 ```bash
-./demo
-./config_check --config ../config/system.xml --xsd-dir ../config/schemas
+./build/demo --config ./config/system.xml --xsd-dir ./schemas
+./build/config_check --config ./config/system.xml --xsd-dir ./schemas
 ```
 
 Notes:
