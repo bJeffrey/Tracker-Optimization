@@ -167,14 +167,17 @@ int main(int argc, char** argv) try {
     idx::SqliteRTreeIndex rtree;
 
     // TrackBatch stores interleaved state: [x y z vx vy vz ax ay az] per track
-    rtree.BuildFromInterleavedXYZ(
-        tb.x.data(),
-        tb.n_tracks,
-        static_cast<std::size_t>(TrackBatch::kDim),
-        /*x_off=*/0,
-        /*y_off=*/1,
-        /*z_off=*/2);
+    
+    //rtree.BuildFromInterleavedXYZ(
+    //    tb.x.data(),
+    //    tb.n_tracks,
+    //    static_cast<std::size_t>(TrackBatch::kDim),
+    //    /*x_off=*/0,
+    //    /*y_off=*/1,
+    //    /*z_off=*/2);
+    rtree.BuildFromXYZ(tb.pos_x.data(), tb.pos_y.data(), tb.pos_z.data(), tb.n_tracks);
 
+    
     const auto ids = rtree.QueryAabb(scan_aabb);
 
     std::cout << "Scan-driven coarse query:\n";

@@ -1,17 +1,11 @@
 #pragma once
 /**
  * @file track_batch.h
- * @brief Structure-of-Arrays (SoA) track storage for high-throughput batch processing.
+ * @brief Structure-of-Arrays (SoA) hot columns + interleaved canonical state buffer.
  *
- * Step 1 objective:
- *  - Introduce a fast, contiguous TrackBatch container that holds:
- *    - metadata (id, last_update_time, status, optional quality)
- *    - state vector x (ECEF CA9: [x y z vx vy vz ax ay az])
- *    - covariance P (full 9x9 for now; 81 doubles per track)
- *
- * Notes:
- *  - Storage is batch-major and contiguous, designed for gather/compute/scatter workflows.
- *  - No database/index integration yet (that’s Step 3+).
+ * Hybrid approach:
+ *  - Canonical state remains interleaved in `x` for minimal disruption.
+ *  - Maintain SoA "hot columns" (pos_x/pos_y/pos_z) for fast spatial indexing and coarse gating.
  */
 
 #include "track_status.h"
@@ -22,23 +16,30 @@
 
 struct TrackBatch
 {
-  // Current state dimension (temporary: fixed 9D CA model)
-  static constexpr int kDim = 9;
+  static constexpr int kDim  = 9;
   static constexpr int kCovN = kDim * kDim; // 81
 
   std::size_t n_tracks = 0;
 
   // --- Metadata ---
-  std::vector<std::uint64_t> track_id;       // length n_tracks
-  std::vector<double>        last_update_s;  // length n_tracks
-  std::vector<TrackStatus>   status;         // length n_tracks
-  std::vector<float>         quality;        // length n_tracks (optional usage)
+  std::vector<std::uint64_t> track_id;
+  std::vector<double>        last_update_s;
+  std::vector<TrackStatus>   status;
+  std::vector<float>         quality;
 
-  // --- State & Covariance (contiguous buffers) ---
-  // x: [n_tracks x kDim] row-major by track (track-major)
+  // --- Canonical interleaved state ---
+  // x: [n_tracks x kDim] row-major by track: [x y z vx vy vz ax ay az]
   std::vector<double> x;
 
-  // P: [n_tracks x kCovN] row-major by track (track-major), each 9x9 row-major
+  // --- Hot SoA columns (kept in sync with `x`) ---
+  std::vector<double> pos_x;
+  std::vector<double> pos_y;
+  std::vector<double> pos_z;
+
+  // (Optional later)
+  // std::vector<double> vel_x, vel_y, vel_z;
+
+  // --- Covariance ---
   std::vector<double> P;
 
   void resize(std::size_t n)
@@ -50,6 +51,11 @@ struct TrackBatch
     quality.resize(n_tracks);
 
     x.assign(n_tracks * static_cast<std::size_t>(kDim), 0.0);
+
+    pos_x.assign(n_tracks, 0.0);
+    pos_y.assign(n_tracks, 0.0);
+    pos_z.assign(n_tracks, 0.0);
+
     P.assign(n_tracks * static_cast<std::size_t>(kCovN), 0.0);
   }
 
@@ -60,7 +66,34 @@ struct TrackBatch
   double* P_ptr(std::size_t i) { return P.data() + i * static_cast<std::size_t>(kCovN); }
   const double* P_ptr(std::size_t i) const { return P.data() + i * static_cast<std::size_t>(kCovN); }
 
-  // Convenience: set P_i = scalar * I (full 9x9)
+  // Keep SoA position columns consistent with interleaved x.
+  // Call this after any operation that modifies x[*][0..2] in bulk.
+  void sync_pos_from_x()
+  {
+    const std::size_t stride = static_cast<std::size_t>(kDim);
+    const double* px = x.data();
+    for (std::size_t i = 0; i < n_tracks; ++i, px += stride) {
+      pos_x[i] = px[0];
+      pos_y[i] = px[1];
+      pos_z[i] = px[2];
+    }
+  }
+
+
+
+  // Optional: if you ever update pos_x/pos_y/pos_z directly (not recommended),
+  // you can push them back into x:
+  void sync_x_pos_from_pos()
+  {
+    const std::size_t stride = static_cast<std::size_t>(kDim);
+    for (std::size_t i = 0; i < n_tracks; ++i) {
+      const std::size_t base = i * stride;
+      x[base + 0] = pos_x[i];
+      x[base + 1] = pos_y[i];
+      x[base + 2] = pos_z[i];
+    }
+  }
+
   void set_cov_identity_scaled(double scalar)
   {
     const std::size_t nn = static_cast<std::size_t>(kCovN);

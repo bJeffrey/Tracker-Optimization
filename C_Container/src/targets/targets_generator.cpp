@@ -393,6 +393,10 @@ void GenerateFromXml(const std::string& targets_xml,
     xi[0] = p.x; xi[1] = p.y; xi[2] = p.z;
     xi[3] = v.x; xi[4] = v.y; xi[5] = v.z;
     xi[6] = a.x; xi[7] = a.y; xi[8] = a.z;
+    tb.pos_x[i] = xi[0];
+    tb.pos_y[i] = xi[1];
+    tb.pos_z[i] = xi[2];
+
 
     // Last update time: now - age
     const double age_s = sample_age_seconds(rng, age_model, tau_s, min_age_s, max_age_s);
