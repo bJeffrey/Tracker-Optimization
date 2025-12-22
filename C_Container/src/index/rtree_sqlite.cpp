@@ -1,3 +1,4 @@
+// src/index/rtree_sqlite.cpp
 #include "index/rtree_sqlite.h"
 
 #include <sqlite3.h>
@@ -14,6 +15,7 @@ struct SqliteRTreeIndex::Impl {
   sqlite3* db = nullptr;
   sqlite3_stmt* insert_stmt = nullptr;
   sqlite3_stmt* query_stmt = nullptr;
+  sqlite3_stmt* clear_stmt = nullptr;  // NEW
   std::size_t count = 0;
 };
 
@@ -76,6 +78,7 @@ SqliteRTreeIndex::~SqliteRTreeIndex() {
   if (!p_) return;
   if (p_->insert_stmt) sqlite3_finalize(p_->insert_stmt);
   if (p_->query_stmt) sqlite3_finalize(p_->query_stmt);
+  if (p_->clear_stmt) sqlite3_finalize(p_->clear_stmt);  // NEW
   if (p_->db) sqlite3_close(p_->db);
   delete p_;
   p_ = nullptr;
@@ -91,6 +94,10 @@ void SqliteRTreeIndex::Reset() {
   if (p_->query_stmt) {
     sqlite3_finalize(p_->query_stmt);
     p_->query_stmt = nullptr;
+  }
+  if (p_->clear_stmt) {  // NEW
+    sqlite3_finalize(p_->clear_stmt);
+    p_->clear_stmt = nullptr;
   }
   p_->count = 0;
 
@@ -117,6 +124,25 @@ void SqliteRTreeIndex::Reset() {
   if (sqlite3_prepare_v2(p_->db, query_sql, -1, &p_->query_stmt, nullptr) != SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 query failed");
   }
+
+  // NEW: clear all rows without dropping schema / re-preparing other statements
+  const char* clear_sql = "DELETE FROM rtree_tracks;";
+  if (sqlite3_prepare_v2(p_->db, clear_sql, -1, &p_->clear_stmt, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_prepare_v2 clear failed");
+  }
+}
+
+void SqliteRTreeIndex::ClearAll() {
+  if (!p_ || !p_->db || !p_->clear_stmt) throw std::runtime_error("ClearAll called before Reset");
+
+  sqlite3_reset(p_->clear_stmt);
+  const int rc = sqlite3_step(p_->clear_stmt);
+  if (rc != SQLITE_DONE) {
+    throw std::runtime_error("sqlite3_step(clear) failed");
+  }
+  sqlite3_reset(p_->clear_stmt);
+
+  p_->count = 0;
 }
 
 void SqliteRTreeIndex::InsertPoint(std::uint64_t id, double x, double y, double z) {
@@ -129,10 +155,14 @@ void SqliteRTreeIndex::BuildFromXYZ(const double* xs,
                                     const double* ys,
                                     const double* zs,
                                     std::size_t n) {
-  Reset();
   if (!xs || !ys || !zs) throw std::runtime_error("BuildFromXYZ: null input pointers");
+  if (!p_ || !p_->db || !p_->insert_stmt) throw std::runtime_error("BuildFromXYZ called before Reset");
 
-  exec_or_throw(p_->db, "BEGIN;");
+  
+
+  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");  // NEW: IMMEDIATE for write-heavy cycles
+  // NEW: don't drop/recreate schema; just clear existing rows
+  ClearAll();
   for (std::size_t i = 0; i < n; ++i) {
     insert_point_stmt_or_throw(p_->insert_stmt,
                                static_cast<std::uint64_t>(i),
@@ -164,9 +194,11 @@ void SqliteRTreeIndex::BuildFromInterleavedXYZ(const double* state,
     throw std::runtime_error(oss.str());
   }
 
-  Reset();
-
-  exec_or_throw(p_->db, "BEGIN;");
+  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");  // NEW
+  
+  // NEW: don't drop/recreate schema; just clear existing rows
+  ClearAll();
+  
   for (std::size_t i = 0; i < n_tracks; ++i) {
     const std::size_t base = i * stride;
     const double x = state[base + x_off];
