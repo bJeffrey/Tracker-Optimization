@@ -1,91 +1,140 @@
-Matrix Optimization – Next Steps (Post Config-Driven Demo, Sensor-Driven Scan Queries)
+Option B Plan: Persistent Motion-Model Buckets + Scenario Loop + Scan Tick
+=======================================================================
 
-Checkpoint (what’s working now)
-- XML + XSD validation works end-to-end
-- Config loader resolves all referenced files correctly (system → scenario → ownship/targets)
-- Demo runs a backend-selected batched RW covariance update (P += Q·dt) using full 9×9
-- Timing + checksum output is stable
-- Sensors.xml defines a scan frustum + schedule that can drive “tracks-in-scan-volume” queries
+Goal for this step
+------------------
+1) Run the scenario for a configured duration T_run_s
+2) At each tracker tick dt, propagate state + covariance using a per-track motion model
+3) At each scan tick (sensor schedule), run the coarse spatial query (RTree) against the track DB/index
+4) Keep it “plugin-like” and fast:
+   - no per-track virtual calls
+   - no passing big buffers by value
+   - persistent model buckets (tracks rarely change models)
 
-Recommended next steps (minimal scope, maximum payoff)
+Step 3A — Data model changes (TrackBatch + motion metadata)
+-----------------------------------------------------------
+Add to TrackBatch (minimal + future-proof):
+- model_id: per-track MotionModelId (e.g., CA9, CT)
+- bucket_slot: per-track index of this track inside its current bucket vector (for O(1) swap-remove)
+- CT parameters (initial set):
+  - ct_omega_z_radps: per-track turn-rate about +Z (rad/s)
 
-1) Add a TrackBatch structure + metadata arrays (no database yet)
-Goal: keep your fast SoA batch layout, but start carrying the minimal “real tracker” metadata you’ll need.
-Suggested fields (SoA arrays):
-- track_id[]            (uint64)
-- last_update_time_s[]  (double)
-- status[]              (enum: ACTIVE / COASTING / DROPPED)
-- quality[]             (float, optional)
-- x[]                   (state, batch-major: N x 9 doubles; ECEF pos/vel/acc)
-- P[]                   (covariance, batch-major: N x 81 doubles; full 9×9 for now)
+Notes:
+- Keep canonical state as CA9 interleaved: [x y z vx vy vz ax ay az] per track.
+- Keep hybrid SoA “hot columns” for queries: pos_x/pos_y/pos_z (maintained via sync_pos_from_x or inside propagation).
 
-Why:
-- Enables hit/miss, aging, scheduling policy, and later DB interactions without changing memory layout.
-- Preserves contiguous buffers for batched math kernels.
+Step 3B — Persistent bucket manager (Option B core)
+---------------------------------------------------
+Create a small utility that owns the buckets and supports O(1) moves.
 
-2) Generate synthetic tracks deterministically (ECEF) from config
-Goal: replace “load from DB” with deterministic “seeded generation” so performance tests are repeatable.
-Use TargetsGen config:
-- Position: ECEF (use ecef_box mixture for both Background and Local, as you validated)
-- Velocity/Acceleration: distributions from config
-- Covariance initialization: sigma ranges or diagonal (start simple)
-- last_update_time_s: use model (uniform_age / exponential_age / mixture_age)
+ModelBuckets holds:
+- bucket_ca: vector<size_t> of track indices using CA9
+- bucket_ct: vector<size_t> of track indices using CT
 
-Why:
-- Lets you scale quickly to 10k–1M tracks reproducibly.
-- Produces the variability needed for update scheduling and later association testing.
+Operations:
+- InitFromTrackBatch(tb):
+  - clear buckets
+  - for each track i:
+    - push i into bucket for tb.model_id[i]
+    - set tb.bucket_slot[i] = position in that bucket
+- MoveTrack(tb, i, new_model):
+  - remove i from old bucket via swap-remove using tb.bucket_slot[i]
+  - push i into new bucket; update tb.bucket_slot[i]
+  - update tb.model_id[i]
 
-3) Add a sensor-driven scan query planner (broadphase) that produces ECEF AABBs
-Goal: query tracks by where the sensor will be scanning next (driven by sensors.xml), without scanning the full DB.
-From sensors.xml, derive a lookahead set of dwells:
-- ScanRateHz → dwell period Tscan
-- For each dwell time t_scan:
-  - Use ownship ECEF position and attitude (R_ecef_from_body)
-  - Interpret scan frustum in OWNERSHIP_BODY (az/el/range min/max)
-  - Convert the frustum to a conservative ECEF AABB by sampling corner rays at r_min/r_max
-  - Inflate the AABB by QueryAabbInflateMeters
-Output per dwell:
-- t_scan
-- AABB in ECEF (minX/maxX/minY/maxY/minZ/maxZ)
-- (retain frustum params for fine filtering later)
+This enables rare model changes with minimal overhead.
 
-Why:
-- Broadphase query uses simple AABB overlap, which maps directly to grid hashing and SQLite R*Tree.
-- Keeps “sensor geometry math” out of the DB query stage.
+Step 3C — Motion model plugin API (library style)
+-------------------------------------------------
+Define a motion model interface that is “plugin-like” but fast.
 
-4) Implement broadphase→narrowphase subset processing using the planned scan AABB(s)
-Goal: validate the core runtime pattern you’ll reuse with a real DB/index.
-For each dwell (or union of a few dwells):
-- candidates = index.query(AABB_ecef)
-- gather: build contiguous x_batch / P_batch for candidate indices
-- propagate: run RW batched update (current fast kernel) to t_scan or dt
-- narrowphase filter (fine geometry):
-  - for candidates, compute relative vector and az/el/range in OWNERSHIP_BODY
-  - keep only those truly inside frustum
-- scatter: write updated x/P back to the global arrays
+IMotionModel:
+- MotionModelId id() const
+- const char* name() const
+- void Propagate(TrackBatch& tb,
+                const std::vector<std::size_t>& idx,
+                double dt_s,
+                const MotionContext& ctx)
 
-Why:
-- This is the speed-critical pattern: AABB query → contiguous compute → scatter.
-- Narrowphase conversion to AER/az-el happens only on candidates, not on the full track set.
+Design notes:
+- Propagate uses index lists (bucket vectors), not copied AoS structs.
+- MotionContext is small, passed by const ref (time, noise settings, etc.).
 
-5) Add timing breakdowns so optimization is guided by data
-Goal: see where time goes before expanding scope.
-Record timing for:
-- scan planner (AABB construction per dwell)
-- broadphase query (index/DB)
-- gather
-- propagate
-- narrowphase filter
-- scatter
-- total
+Step 3D — Implement two models (CA9 + CT)
+-----------------------------------------
+1) CA9 (constant acceleration; canonical state propagation)
+State:
+- pos += vel*dt + 0.5*acc*dt^2
+- vel += acc*dt
+- acc unchanged
 
-Why:
-- Helps you decide if the next investment should be better indexing, better cache locality, larger batches, or parallel strategy.
+Covariance (two-phase plan):
+Phase 1 (now, fast, consistent with current demo):
+- P += Q*dt  (random-walk style)
 
-Next deliverable (once you’re ready)
-- Patch zip that adds:
-  - TrackBatch (SoA)
-  - ScanVolumePlanner (reads sensors.xml and emits ECEF AABBs per dwell)
-  - A simple broadphase index (grid hash) that can later be swapped for SQLite R*Tree
-  - main.cpp flow: generate→index→plan scans→query→gather→propagate→filter→scatter
-  - timing breakdown prints
+Phase 2 (later):
+- P = F P F^T + Q with CA9 F (batched backend-by-backend)
+
+2) CT (constant turn) implemented as “CT-in-XY with ωz” (no state dimension change)
+State:
+- treat CT as velocity rotating in XY plane by θ = ω*dt (ω = ct_omega_z_radps[i])
+- update (vx, vy) by 2D rotation
+- update (x, y) accordingly (z axis continues straight / CA behavior)
+- (ax, ay, az) can remain as-is or be handled conservatively (initially keep as-is)
+
+This yields a real CT behavior while keeping your fixed 9D state vector.
+
+Step 3E — Model selection structure (MHT-ish, single-best-model for now)
+-----------------------------------------------------------------------
+Add a ModelSelector that can change models but stays simple initially.
+
+ModelSelector::UpdateModels(tb, buckets, t, dt)
+Initial behaviors:
+- default: all CA9
+- CT for subset of tracks based on:
+  - scenario config (e.g., fraction turning), OR
+  - simple heuristic (e.g., if |a_lat| > threshold => CT), OR
+  - scripted events from scenario XML (later)
+
+When a track changes model:
+- buckets.MoveTrack(tb, i, new_model)
+
+This mirrors MHT/IMM structure (model choice), but collapses to a single selected model per track.
+
+Step 3F — Scenario loop and scan tick
+-------------------------------------
+Add a real time loop in the demo (or split into a tracker_driver later).
+
+Inputs:
+- T_run_s: total scenario duration
+- dt_s: tracker update tick
+- scan_rate_hz: from sensors schedule (fallback if missing)
+
+Loop:
+for (t = 0; t < T_run_s; t += dt_s):
+  1) selector: optionally update models (every tick or every N ticks)
+  2) propagate by bucket:
+     - CA.Propagate(tb, buckets.bucket_ca, dt_s, ctx)
+     - CT.Propagate(tb, buckets.bucket_ct, dt_s, ctx)
+  3) maintain query columns:
+     - tb.sync_pos_from_x() (or update pos_x/y/z inside propagation)
+  4) scan tick:
+     - if (t >= next_scan_time):
+         - build/update RTree from pos_x/y/z (or interleaved x with stride)
+         - compute scan AABB from first sensor (or iterate sensors)
+         - query candidates, store/print results
+         - next_scan_time += 1.0/scan_rate_hz
+
+Step 3G — “Done” checklist for this step
+----------------------------------------
+1) TrackBatch has: model_id, bucket_slot, ct_omega_z_radps (plus pos_x/y/z for query)
+2) ModelBuckets implemented and used (persistent buckets)
+3) IMotionModel interface added (plugin-style)
+4) MotionModel_CA9 and MotionModel_CT_XYOmega compiled and invoked
+5) Scenario loop runs for T_run_s with dt_s and scan ticks at scan_rate_hz
+6) No per-track virtual calls; no pass-by-value of large buffers
+
+Concrete implementation note
+----------------------------
+For CT, implement CT-in-XY with per-track ωz metadata. This is the cleanest way to get
+real turning behavior now without changing your 9D state dimension.
