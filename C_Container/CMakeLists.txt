@@ -149,9 +149,14 @@ find_package(SQLite3 REQUIRED)
 add_library(track_index STATIC
   src/index/rtree_sqlite.cpp
   src/index/scan_volume.cpp
+  src/index/uniform_grid_index.cpp
+  src/index/index_update_manager.cpp
+  src/index/sqlite_rtree_backend.cpp
+  src/index/spatial_index_factory.cpp
 )
 target_include_directories(track_index PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(track_index PUBLIC SQLite::SQLite3)
+#target_link_libraries(track_index PUBLIC SQLite::SQLite3)
+target_link_libraries(track_index PUBLIC sqlite3)
 
 # ------------------------------
 # Demo executable (config-driven)
