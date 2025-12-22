@@ -1,4 +1,12 @@
 // src/index/rtree_sqlite.cpp
+//
+// Step 3 implementation: revert per-scan rebuild to DROP+CREATE (Reset) instead of DELETE-all.
+//
+// Rationale:
+// - For SQLite RTree, `DELETE FROM rtree_tracks;` can be as expensive as (or worse than)
+//   dropping and recreating the virtual table.
+// - This version keeps your prepared statements approach, but rebuilds by calling Reset().
+
 #include "index/rtree_sqlite.h"
 
 #include <sqlite3.h>
@@ -15,7 +23,7 @@ struct SqliteRTreeIndex::Impl {
   sqlite3* db = nullptr;
   sqlite3_stmt* insert_stmt = nullptr;
   sqlite3_stmt* query_stmt = nullptr;
-  sqlite3_stmt* clear_stmt = nullptr;  // NEW
+  sqlite3_stmt* clear_stmt = nullptr;  // kept if you still have ClearAll() in the header
   std::size_t count = 0;
 };
 
@@ -37,11 +45,8 @@ static inline void insert_point_stmt_or_throw(sqlite3_stmt* stmt,
                                               bool clear_bindings) {
   if (!stmt) throw std::runtime_error("insert_point_stmt_or_throw: stmt is null");
 
-  // Reset the prepared statement for reuse.
   sqlite3_reset(stmt);
 
-  // In tight loops, clearing bindings is unnecessary if we bind all params every time.
-  // Keep it optional for safety in case InsertPoint() changes later.
   if (clear_bindings) {
     sqlite3_clear_bindings(stmt);
   }
@@ -66,7 +71,7 @@ SqliteRTreeIndex::SqliteRTreeIndex() : p_(new Impl()) {
     throw std::runtime_error("sqlite3_open(:memory:) failed");
   }
 
-  // Optional but useful for in-memory speed; safe for :memory: usage.
+  // Pragmas for in-memory speed
   exec_or_throw(p_->db, "PRAGMA temp_store=MEMORY;");
   exec_or_throw(p_->db, "PRAGMA synchronous=OFF;");
   exec_or_throw(p_->db, "PRAGMA journal_mode=MEMORY;");
@@ -78,7 +83,7 @@ SqliteRTreeIndex::~SqliteRTreeIndex() {
   if (!p_) return;
   if (p_->insert_stmt) sqlite3_finalize(p_->insert_stmt);
   if (p_->query_stmt) sqlite3_finalize(p_->query_stmt);
-  if (p_->clear_stmt) sqlite3_finalize(p_->clear_stmt);  // NEW
+  if (p_->clear_stmt) sqlite3_finalize(p_->clear_stmt);
   if (p_->db) sqlite3_close(p_->db);
   delete p_;
   p_ = nullptr;
@@ -95,7 +100,7 @@ void SqliteRTreeIndex::Reset() {
     sqlite3_finalize(p_->query_stmt);
     p_->query_stmt = nullptr;
   }
-  if (p_->clear_stmt) {  // NEW
+  if (p_->clear_stmt) {
     sqlite3_finalize(p_->clear_stmt);
     p_->clear_stmt = nullptr;
   }
@@ -107,15 +112,13 @@ void SqliteRTreeIndex::Reset() {
                 "id, minX, maxX, minY, maxY, minZ, maxZ"
                 ");");
 
-  // Prepared statements:
-  // Insert: id, minX,maxX,minY,maxY,minZ,maxZ
+  // Insert prepared statement
   const char* insert_sql = "INSERT INTO rtree_tracks VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);";
   if (sqlite3_prepare_v2(p_->db, insert_sql, -1, &p_->insert_stmt, nullptr) != SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 insert failed");
   }
 
-  // Overlap query:
-  // Find boxes that overlap [min,max] in each dimension.
+  // Overlap query prepared statement
   const char* query_sql =
       "SELECT id FROM rtree_tracks WHERE "
       "minX <= ?2 AND maxX >= ?1 AND "
@@ -125,13 +128,16 @@ void SqliteRTreeIndex::Reset() {
     throw std::runtime_error("sqlite3_prepare_v2 query failed");
   }
 
-  // NEW: clear all rows without dropping schema / re-preparing other statements
+  // Optional: keep ClearAll() functional if your header declares it.
+  // Not used by BuildFrom* in "Step 3" mode.
   const char* clear_sql = "DELETE FROM rtree_tracks;";
   if (sqlite3_prepare_v2(p_->db, clear_sql, -1, &p_->clear_stmt, nullptr) != SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 clear failed");
   }
 }
 
+// If you kept ClearAll() in the header, keep this implementation.
+// Not used for Step 3 rebuild, but harmless and can be used later for experiments.
 void SqliteRTreeIndex::ClearAll() {
   if (!p_ || !p_->db || !p_->clear_stmt) throw std::runtime_error("ClearAll called before Reset");
 
@@ -141,7 +147,6 @@ void SqliteRTreeIndex::ClearAll() {
     throw std::runtime_error("sqlite3_step(clear) failed");
   }
   sqlite3_reset(p_->clear_stmt);
-
   p_->count = 0;
 }
 
@@ -156,13 +161,11 @@ void SqliteRTreeIndex::BuildFromXYZ(const double* xs,
                                     const double* zs,
                                     std::size_t n) {
   if (!xs || !ys || !zs) throw std::runtime_error("BuildFromXYZ: null input pointers");
-  if (!p_ || !p_->db || !p_->insert_stmt) throw std::runtime_error("BuildFromXYZ called before Reset");
 
-  
+  // STEP 3: drop + create + re-prepare statements per build
+  Reset();
 
-  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");  // NEW: IMMEDIATE for write-heavy cycles
-  // NEW: don't drop/recreate schema; just clear existing rows
-  ClearAll();
+  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");
   for (std::size_t i = 0; i < n; ++i) {
     insert_point_stmt_or_throw(p_->insert_stmt,
                                static_cast<std::uint64_t>(i),
@@ -194,11 +197,10 @@ void SqliteRTreeIndex::BuildFromInterleavedXYZ(const double* state,
     throw std::runtime_error(oss.str());
   }
 
-  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");  // NEW
-  
-  // NEW: don't drop/recreate schema; just clear existing rows
-  ClearAll();
-  
+  // STEP 3: drop + create + re-prepare statements per build
+  Reset();
+
+  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");
   for (std::size_t i = 0; i < n_tracks; ++i) {
     const std::size_t base = i * stride;
     const double x = state[base + x_off];
@@ -220,7 +222,6 @@ std::vector<std::uint64_t> SqliteRTreeIndex::QueryAabb(const EcefAabb& aabb) con
   if (!p_ || !p_->query_stmt) throw std::runtime_error("QueryAabb called before Reset");
   sqlite3_reset(p_->query_stmt);
 
-  // We always bind all query parameters, so no need to sqlite3_clear_bindings() here.
   sqlite3_bind_double(p_->query_stmt, 1, aabb.min_x);
   sqlite3_bind_double(p_->query_stmt, 2, aabb.max_x);
   sqlite3_bind_double(p_->query_stmt, 3, aabb.min_y);
