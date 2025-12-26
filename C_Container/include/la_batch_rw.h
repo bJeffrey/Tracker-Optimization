@@ -41,5 +41,22 @@ void rw_add_qdt_subset(double* P,
                        int n,
                        const std::uint64_t* ids,
                        std::size_t n_ids);
+                       
+/**
+ * @brief Add scaled process noise to a subset with per-track dt:
+ *        for k in [0..n_ids): P[ ids[k] ] += Q_per_sec * dt_s_per_id[k]
+ *
+ * Notes:
+ * - ids are track indices (not track_id)
+ * - dt_s_per_id is aligned with ids (same length, same ordering)
+ * - intentionally single-threaded (typical candidate sets are small)
+ */
+void rw_add_qdt_subset_var_dt(double* P_batch,
+                              const double* Q_per_sec,
+                              int n,
+                              const std::uint64_t* ids,
+                              const double* dt_s_per_id,
+                              std::size_t n_ids);
+
 
 } // namespace la

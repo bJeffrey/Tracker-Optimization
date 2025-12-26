@@ -48,4 +48,27 @@ void rw_add_qdt_subset(double* P_batch,
   }
 }
 
+void rw_add_qdt_subset_var_dt(double* P_batch,
+                              const double* Q_per_sec,
+                              int n,
+                              const std::uint64_t* ids,
+                              const double* dt_s_per_id,
+                              std::size_t n_ids)
+{
+  if (!P_batch || !Q_per_sec || !ids || !dt_s_per_id || n <= 0 || n_ids == 0) return;
+
+  const MKL_INT nn = static_cast<MKL_INT>(n) * static_cast<MKL_INT>(n);
+
+  for (std::size_t k = 0; k < n_ids; ++k) {
+    const double dt = dt_s_per_id[k];
+    if (dt <= 0.0) continue;
+
+    const std::size_t i = static_cast<std::size_t>(ids[k]);
+    double* Pi = P_batch + i * static_cast<std::size_t>(nn);
+
+    // Pi += dt * Q_per_sec
+    cblas_daxpy(nn, dt, Q_per_sec, 1, Pi, 1);
+  }
+}
+
 } // namespace la

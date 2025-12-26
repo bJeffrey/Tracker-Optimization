@@ -142,6 +142,9 @@ int main(int argc, char** argv) try {
   const double d_th_m_cli             = arg_double(argc, argv, "--dth-m", 0.0);      // 0 => no override
   const double t_max_s_cli            = arg_double(argc, argv, "--tmax-s", 0.0);     // 0 => no override
 
+  // printing
+  const bool verbose = has_flag(argc, argv, "--verbose");
+  
   // Load config (with optional schema validation depending on xsd_dir)
   const cfg::ConfigBundle cfg = cfg::ConfigLoader::Load(system_xml, xsd_dir);
 
@@ -173,16 +176,13 @@ int main(int argc, char** argv) try {
   TrackBatch tb;
   tb.resize(batch);
 
+  tb.set_cov_identity_scaled(1.0);                  // or whatever baseline you want
+  std::fill(tb.last_update_s.begin(), tb.last_update_s.end(), 0.0);  // P is aged-to t=0
+
+
   // ------------------------------
   // Step 2: deterministic target generation (ECEF CA9)
   // ------------------------------
-  double gen_s = 0.0;
-  if (!no_gen) {
-    const auto g0 = std::chrono::high_resolution_clock::now();
-    targets::GenerateFromXml(cfg.paths.targets_xml, cfg.paths.xsd_dir, cfg.ownship, tb);
-    const auto g1 = std::chrono::high_resolution_clock::now();
-    gen_s = std::chrono::duration<double>(g1 - g0).count();
-  }
 
   // Define a simple Q_per_sec (row-major) consistent with a CA9 state ordering.
   const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
@@ -200,24 +200,15 @@ int main(int argc, char** argv) try {
   for (int k = 0; k < 3; ++k) Q[(k + 3) * n + (k + 3)] = q_vel;
   for (int k = 0; k < 3; ++k) Q[(k + 6) * n + (k + 6)] = q_acc;
 
-  // Propagate covariance unless --gen-only
-  double prop_s = 0.0;
-  if (!gen_only) {
-    const auto t0 = std::chrono::high_resolution_clock::now();
-    la::rw_add_qdt_batch(tb.P.data(), Q.data(), dt_s, n, batch);
-    const auto t1 = std::chrono::high_resolution_clock::now();
-    prop_s = std::chrono::duration<double>(t1 - t0).count();
-  }
-
   std::cout << "Config: " << system_xml << "\n";
   std::cout << "XSD:    " << xsd_dir << "\n";
   std::cout << "dim=" << n << " tracks=" << batch << " dt_s=" << dt_s << "\n";
 
-  if (!no_gen) {
-    std::cout << "Generation time: " << gen_s << " s (targets_xml=" << cfg.paths.targets_xml << ")\n";
-  } else {
-    std::cout << "Generation skipped (--no-gen)\n";
-  }
+  // Covariance aging stats (scan-driven), printed once at end.
+  // Keep outside Step-3 block so scope is valid.
+  double cov_age_acc_s = 0.0;
+  std::size_t cov_age_calls = 0;
+  std::size_t cov_age_tracks_acc = 0;
 
   // ------------------------------------------------------------
   // Step 3A–3F: SoA motion loop + scan-tick coarse query via pluggable index backend.
@@ -311,9 +302,6 @@ int main(int argc, char** argv) try {
     std::size_t scan_count = 0;
     const auto loop_t0 = std::chrono::high_resolution_clock::now();
 
-    double last_cov_scan_s = 0.0;
-    bool cov_inited = false;
-
 
     motion::run_scenario_loop(
         tbm, buckets, model_ca, model_ct, selector, mcfg,
@@ -327,7 +315,7 @@ int main(int argc, char** argv) try {
           const auto t0 = std::chrono::high_resolution_clock::now();
           upd.Apply(t_s, tb_ref.pos_x.data(), tb_ref.pos_y.data(), tb_ref.pos_z.data(), *index);
           const auto t1 = std::chrono::high_resolution_clock::now();
-          const auto ids = index->QueryAabb(scan_aabb);
+          auto ids = index->QueryAabb(scan_aabb);
           const auto t2 = std::chrono::high_resolution_clock::now();
 
           update_acc += std::chrono::duration<double>(t1 - t0).count();
@@ -335,26 +323,44 @@ int main(int argc, char** argv) try {
           nupd_acc   += static_cast<double>(upd.NumUpdatedLastApply());
           k_acc++;
 
-          // --- Age covariance for candidate tracks to scan time (constant ΔT per scan) ---
-          if (!cov_inited) {
-            last_cov_scan_s = t_s;
-            cov_inited = true;
-          } else {
-            const double dT = t_s - last_cov_scan_s;
-            if (dT > 0.0 && !ids.empty()) {
-              la::rw_add_qdt_subset(tb.P.data(), Q.data(), dT, n, ids.data(), ids.size());
-            }
-            last_cov_scan_s = t_s;
+          // --- Scan-driven covariance aging (lazy): age only candidates to scan time t_s ---
+          // Reuse TrackBatch::last_update_s as "P-aged-to time" (per-track).
+          static std::vector<double> dt_ids;
+          
+           if (dt_ids.capacity() < ids.size()) dt_ids.reserve(ids.size());
+           dt_ids.resize(ids.size());
+
+          for (std::size_t k = 0; k < ids.size(); ++k) {
+            const std::size_t i = static_cast<std::size_t>(ids[k]);
+
+            const double dt_i = t_s - tb.last_update_s[i];
+            dt_ids[k] = (dt_i > 0.0) ? dt_i : 0.0;
+
+            // Mark covariance as aged to scan time (even if dt_i <= 0, this is harmless)
+            tb.last_update_s[i] = t_s;
           }
 
-          if (k_acc % 5 == 0) {
+          // Apply P += Q * dt_i for each candidate
+          const auto tc0 = std::chrono::high_resolution_clock::now();
+
+          if (!ids.empty()) {
+            la::rw_add_qdt_subset_var_dt(tb.P.data(), Q.data(), n,
+                                         ids.data(), dt_ids.data(), ids.size());
+          }
+
+          const auto tc1 = std::chrono::high_resolution_clock::now();
+          cov_age_acc_s += std::chrono::duration<double>(tc1 - tc0).count();
+          cov_age_calls++;
+          cov_age_tracks_acc += ids.size();
+
+          if (verbose && k_acc % 5 == 0) {
             std::cout << "  avg_update_s=" << (update_acc / k_acc)
                       << " avg_query_s="  << (query_acc / k_acc)
                       << " avg_n_updated=" << (nupd_acc / k_acc)
                       << "\n";
           }
 
-          if (scan_count <= 3 || (scan_count % 10 == 0)) {
+          if (verbose && scan_count <= 3 || (scan_count % 10 == 0)) {
             std::cout << "  scan=" << scan_count
                       << " t_s=" << t_s
                       << " n_updated=" << upd.NumUpdatedLastApply()
@@ -371,11 +377,16 @@ int main(int argc, char** argv) try {
   }
 
   if (!gen_only) {
-    std::cout << "RW batch propagation time: " << prop_s
-              << " s, checksum " << checksum(tb.P) << "\n";
+    std::cout << "Covariance aging (scan-driven): "
+            << "calls=" << cov_age_calls
+            << " avg_tracks_per_call=" << (cov_age_calls ? (static_cast<double>(cov_age_tracks_acc) / cov_age_calls) : 0.0)
+            << " total_s=" << cov_age_acc_s
+            << " avg_s_per_call=" << (cov_age_calls ? (cov_age_acc_s / cov_age_calls) : 0.0)
+            << " checksum " << checksum(tb.P) << "\n";
   } else {
     std::cout << "Propagation skipped (--gen-only)\n";
   }
+
 
   return 0;
 
