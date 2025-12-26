@@ -148,6 +148,7 @@ RUN sqlite3 ":memory:" "pragma compile_options;" | grep -i ENABLE_RTREE
 #
 # IMPORTANT:
 # - We install curl+gnupg only in the MKL path to keep non-MKL images leaner/faster.
+# - We also pin MKL threading to 1 when using outer OpenMP parallelism in our kernels.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     bash -lc 'set -e; \
@@ -159,8 +160,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
           > /etc/apt/sources.list.d/oneAPI.list && \
         apt-get update && apt-get install -y --no-install-recommends intel-oneapi-mkl && \
-        rm -rf /var/lib/apt/lists/*; \
+        rm -rf /var/lib/apt/lists/* && \
+        printf "%s\n" \
+          "export MKL_NUM_THREADS=1" \
+          "export MKL_DYNAMIC=FALSE" \
+          > /etc/profile.d/mkl_threads.sh; \
       fi'
+
+# Defaults are harmless for non-MKL images; effective when MKL is installed.
+ENV MKL_NUM_THREADS=1
+ENV MKL_DYNAMIC=FALSE
+
 
 # Copy the built binaries
 COPY --from=build /build/demo         /usr/local/bin/demo

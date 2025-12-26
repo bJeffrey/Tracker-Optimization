@@ -16,6 +16,7 @@
  */
 
 #include <cstddef>
+#include <cstdint>
 
 namespace la {
 
@@ -32,5 +33,13 @@ void rw_add_qdt_batch(double* P_batch,
                       double dt_s,
                       int n,
                       std::size_t batch);
+
+// New: subset update (ids are track indices [0..n_tracks-1])
+void rw_add_qdt_subset(double* P,
+                       const double* Q,
+                       double dt,
+                       int n,
+                       const std::uint64_t* ids,
+                       std::size_t n_ids);
 
 } // namespace la

@@ -32,6 +32,7 @@
 #include "index/index_update_manager.h"
 #include "index/spatial_index_factory.h"
 #include "index/spatial_index_3d.h"
+#include "index/uniform_grid_index.h"
 
 #include "track_batch.h"
 
@@ -134,11 +135,12 @@ int main(int argc, char** argv) try {
   const double run_s      = arg_double(argc, argv, "--run-s",  3.0);
   const double scan_hz    = arg_double(argc, argv, "--scan-hz", 2.0);
 
-  // Spatial index controls (CLI overrides; later wire to cfg.index.*)
-  const std::string index_backend = arg_value(argc, argv, "--index-backend", "sqlite_rtree");
-  const double cell_m_cli         = arg_double(argc, argv, "--cell-m", 0.0);     // 0 => derive
-  const double d_th_m_cli         = arg_double(argc, argv, "--dth-m", 0.0);      // 0 => derive
-  const double t_max_s_cli        = arg_double(argc, argv, "--tmax-s", 0.0);     // 0 => derive
+  // Spatial index controls (CLI overrides; XML drives defaults)
+  // NOTE: empty string means "no override"
+  const std::string index_backend_cli = arg_value(argc, argv, "--index-backend", "");
+  const double cell_m_cli             = arg_double(argc, argv, "--cell-m", 0.0);     // 0 => no override
+  const double d_th_m_cli             = arg_double(argc, argv, "--dth-m", 0.0);      // 0 => no override
+  const double t_max_s_cli            = arg_double(argc, argv, "--tmax-s", 0.0);     // 0 => no override
 
   // Load config (with optional schema validation depending on xsd_dir)
   const cfg::ConfigBundle cfg = cfg::ConfigLoader::Load(system_xml, xsd_dir);
@@ -242,19 +244,45 @@ int main(int argc, char** argv) try {
     mcfg.dt_s = dt_s;
     mcfg.scan_rate_hz = (scan_hz > 0.0) ? scan_hz : 1.0;
 
-    // ---- Create spatial index backend (sqlite_rtree or uniform_grid)
+    // ---- Create spatial index backend (XML default, CLI override)
     idx::SpatialIndexConfig icfg;
-    icfg.backend = index_backend;
 
-    // Derive defaults from existing config/sensor params (until cfg.index.* exists)
-    const double scan_inflate_m = (sensor.scan.query_aabb_inflate_m > 0.0) ? sensor.scan.query_aabb_inflate_m : 2000.0;
-    icfg.grid_cell_m = (cell_m_cli > 0.0) ? cell_m_cli : scan_inflate_m;
+    const std::string backend_xml = sensor.scan.index.backend;
+    icfg.backend = !index_backend_cli.empty() ? index_backend_cli : backend_xml;
+    if (icfg.backend.empty()) {
+      icfg.backend = "sqlite_rtree"; // final fallback
+    }
 
-    const double d_th_m = (d_th_m_cli > 0.0) ? d_th_m_cli : (0.25 * icfg.grid_cell_m);
-    const double t_max_s = (t_max_s_cli > 0.0) ? t_max_s_cli : (2.0 / mcfg.scan_rate_hz); // ~2 scans
+    // Base value for derivations
+    const double scan_inflate_m =
+      (sensor.scan.query_aabb_inflate_m > 0.0) ? sensor.scan.query_aabb_inflate_m : 2000.0;
+
+    // Cell size: CLI > XML > derived
+    icfg.grid_cell_m =
+      (cell_m_cli > 0.0) ? cell_m_cli :
+      (sensor.scan.index.cell_m > 0.0 ? sensor.scan.index.cell_m : scan_inflate_m);
+
+    // Move threshold: CLI > XML > derived
+    const double d_th_m =
+      (d_th_m_cli > 0.0) ? d_th_m_cli :
+      (sensor.scan.index.d_th_m > 0.0 ? sensor.scan.index.d_th_m : (0.25 * icfg.grid_cell_m));
+
+    // Max age: CLI > XML > derived (~2 scans)
+    const double t_max_s =
+      (t_max_s_cli > 0.0) ? t_max_s_cli :
+      (sensor.scan.index.t_max_s > 0.0 ? sensor.scan.index.t_max_s : (2.0 / mcfg.scan_rate_hz));
 
     std::unique_ptr<idx::ISpatialIndex3D> index = idx::CreateSpatialIndex(icfg);
     index->Reserve(tbm.n);
+
+    // Apply probe limit if backend supports it (UniformGridIndex)
+    if (icfg.backend == "uniform_grid") {
+      // Requires: #include "index/uniform_grid_index.h" at top of file
+      if (auto* grid = dynamic_cast<idx::UniformGridIndex*>(index.get())) {
+        grid->SetDenseCellProbeLimit(sensor.scan.index.dense_cell_probe_limit);
+      }
+    }
+
 
     idx::IndexUpdateManager upd;
     upd.Reset(tbm.n);
@@ -269,13 +297,23 @@ int main(int argc, char** argv) try {
     std::cout << "  index.backend=" << icfg.backend
               << " supports_incremental=" << (index->SupportsIncrementalUpdates() ? "yes" : "no") << "\n";
     if (icfg.backend == "uniform_grid") {
-      std::cout << "  grid.cell_m=" << icfg.grid_cell_m << " d_th_m=" << d_th_m << " t_max_s=" << t_max_s << "\n";
+      std::cout << "  grid.cell_m=" << icfg.grid_cell_m
+                << " d_th_m=" << d_th_m
+                << " t_max_s=" << t_max_s
+                << " dense_cell_probe_limit=" << sensor.scan.index.dense_cell_probe_limit
+                << "\n";
     } else {
-      std::cout << "  d_th_m=" << d_th_m << " t_max_s=" << t_max_s << " (used by update manager; backend may rebuild)\n";
+      std::cout << "  d_th_m=" << d_th_m
+                << " t_max_s=" << t_max_s
+                << " (used by update manager; backend may rebuild)\n";
     }
 
     std::size_t scan_count = 0;
     const auto loop_t0 = std::chrono::high_resolution_clock::now();
+
+    double last_cov_scan_s = 0.0;
+    bool cov_inited = false;
+
 
     motion::run_scenario_loop(
         tbm, buckets, model_ca, model_ct, selector, mcfg,
@@ -283,23 +321,36 @@ int main(int argc, char** argv) try {
           ++scan_count;
 
           static double update_acc = 0.0, query_acc = 0.0;
+          static double nupd_acc = 0.0;
           static std::size_t k_acc = 0;
 
-          auto t0 = std::chrono::high_resolution_clock::now();
-          // Incremental (grid) or degraded rebuild (sqlite) handled inside Apply()
+          const auto t0 = std::chrono::high_resolution_clock::now();
           upd.Apply(t_s, tb_ref.pos_x.data(), tb_ref.pos_y.data(), tb_ref.pos_z.data(), *index);
-          auto t1 = std::chrono::high_resolution_clock::now();
-          auto ids = index->QueryAabb(scan_aabb);
-          auto t2 = std::chrono::high_resolution_clock::now();
+          const auto t1 = std::chrono::high_resolution_clock::now();
+          const auto ids = index->QueryAabb(scan_aabb);
+          const auto t2 = std::chrono::high_resolution_clock::now();
 
           update_acc += std::chrono::duration<double>(t1 - t0).count();
           query_acc  += std::chrono::duration<double>(t2 - t1).count();
+          nupd_acc   += static_cast<double>(upd.NumUpdatedLastApply());
           k_acc++;
+
+          // --- Age covariance for candidate tracks to scan time (constant ΔT per scan) ---
+          if (!cov_inited) {
+            last_cov_scan_s = t_s;
+            cov_inited = true;
+          } else {
+            const double dT = t_s - last_cov_scan_s;
+            if (dT > 0.0 && !ids.empty()) {
+              la::rw_add_qdt_subset(tb.P.data(), Q.data(), dT, n, ids.data(), ids.size());
+            }
+            last_cov_scan_s = t_s;
+          }
 
           if (k_acc % 5 == 0) {
             std::cout << "  avg_update_s=" << (update_acc / k_acc)
                       << " avg_query_s="  << (query_acc / k_acc)
-                      << " avg_n_updated=" << (static_cast<double>(upd.NumUpdatedLastApply()))
+                      << " avg_n_updated=" << (nupd_acc / k_acc)
                       << "\n";
           }
 

@@ -212,6 +212,12 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
     try { return std::stod(s); } catch (...) { return def; }
   };
 
+  auto child_u64 = [&](xmlNodePtr parent, const char* child_name, std::uint64_t def) -> std::uint64_t {
+    std::string s = child_text(parent, child_name);
+    if (s.empty()) return def;
+    try { return static_cast<std::uint64_t>(std::stoull(s)); } catch (...) { return def; }
+  };
+
   auto find_child = [&](xmlNodePtr parent, const char* child_name) -> xmlNodePtr {
     if (!parent) return nullptr;
     for (xmlNodePtr c = parent->children; c; c = c->next) {
@@ -244,6 +250,25 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
       s.scan.frame = child_text(scan, "Frame");
       s.scan.query_aabb_inflate_m = child_double(scan, "QueryAabbInflateMeters", 0.0);
 
+      // -------------------------------
+      // NEW: index tuning knobs (optional)
+      // Stored under ScanVolumeCfg::index (matches XML placement under <ScanVolume>)
+      // -------------------------------
+      {
+        const std::string idx_backend = child_text(scan, "IndexBackend");
+        if (!idx_backend.empty()) {
+          s.scan.index.backend = idx_backend; // e.g., "uniform_grid" or "sqlite_rtree"
+        }
+
+        s.scan.index.cell_m = child_double(scan, "IndexCellMeters", s.scan.index.cell_m);
+        s.scan.index.d_th_m = child_double(scan, "IndexMoveThresholdMeters", s.scan.index.d_th_m);
+        s.scan.index.t_max_s = child_double(scan, "IndexMaxAgeSeconds", s.scan.index.t_max_s);
+
+        s.scan.index.dense_cell_probe_limit =
+          child_u64(scan, "IndexDenseCellProbeLimit", s.scan.index.dense_cell_probe_limit);
+      }
+
+
       bool have_frustum = false;
 
       // Frustum (optional)
@@ -263,9 +288,7 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
                        (s.scan.frustum.r_min_m    != 0.0);
       }
 
-      // Sphere (optional) — XSD: <Sphere><RangeMeters>PositiveDouble</RangeMeters></Sphere>
-      // If Sphere is provided and Frustum is missing/empty, convert to an “all-angles” frustum
-      // so downstream AABB generation stays well-defined.
+      // Sphere (optional)
       if (!have_frustum) {
         if (xmlNodePtr sphere = find_child(scan, "Sphere")) {
           const double r = child_double(sphere, "RangeMeters", 0.0);
@@ -283,11 +306,8 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
 
     // Schedule (optional)
     if (xmlNodePtr sched = find_child(n, "Schedule")) {
-      // XSD location: Schedule/ScanRateHz
       s.scan_rate_hz = child_double(sched, "ScanRateHz", 0.0);
-
-      // XSD also allows Schedule/ScanEvents/Event/TimeSeconds.
-      // Config types don’t currently store them, so we intentionally ignore for now.
+      // (Scan events ignored for now)
     }
 
     out.sensors.push_back(std::move(s));
@@ -295,6 +315,7 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
 
   return out; // DocGuard frees
 }
+
 
 
 static StoreCfg parse_store(void* doc) {

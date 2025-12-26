@@ -6,6 +6,23 @@
     <!-- Scan volume defined relative to ownship; used to query candidate tracks -->
     <ScanVolume>
       <Frame>OWNERSHIP_BODY</Frame>
+
+      <!-- NEW: coarse spatial index knobs (optional) -->
+      <!-- backend: "uniform_grid" (fast in-RAM) or "sqlite_rtree" (SQLite R*Tree) -->
+      <IndexBackend>uniform_grid</IndexBackend>
+
+      <!-- grid resolution (meters). If omitted/0, code can derive from QueryAabbInflateMeters -->
+      <IndexCellMeters>2000</IndexCellMeters>
+
+      <!-- incremental update trigger: update index entry if track moved >= this distance (meters) -->
+      <IndexMoveThresholdMeters>500</IndexMoveThresholdMeters>
+
+      <!-- max age before forcing an index refresh (seconds) -->
+      <IndexMaxAgeSeconds>1.0</IndexMaxAgeSeconds>
+
+      <!-- when AABB spans more than this many cells, UniformGridIndex switches to sparse scan -->
+      <IndexDenseCellProbeLimit>200000</IndexDenseCellProbeLimit>
+
       <Frustum>
         <AzimuthDeg min="-60" max="60"/>
         <ElevationDeg min="-10" max="20"/>

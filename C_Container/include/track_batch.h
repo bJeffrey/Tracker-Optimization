@@ -23,7 +23,8 @@ struct TrackBatch
 
   // --- Metadata ---
   std::vector<std::uint64_t> track_id;
-  std::vector<double>        last_update_s;
+  std::vector<double>        last_update_s;     // last measurement/track update time (future)
+  std::vector<double>        last_cov_prop_s;   // NEW: last time covariance was propagated to
   std::vector<TrackStatus>   status;
   std::vector<float>         quality;
 
@@ -47,6 +48,7 @@ struct TrackBatch
     n_tracks = n;
     track_id.resize(n_tracks);
     last_update_s.resize(n_tracks);
+    last_cov_prop_s.resize(n_tracks);
     status.resize(n_tracks);
     quality.resize(n_tracks);
 

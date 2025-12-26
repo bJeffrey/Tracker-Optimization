@@ -152,10 +152,20 @@ struct ScanFrustumCfg {
   double r_max_m = 0.0;
 };
 
+struct SpatialIndexCfg {
+  std::string backend = "sqlite_rtree";
+  double cell_m = 0.0;
+  double d_th_m = 0.0;
+  double t_max_s = 0.0;
+  std::uint64_t dense_cell_probe_limit = 200000;
+};
+
 struct ScanVolumeCfg {
   std::string frame;               // e.g., "OWNERSHIP_BODY"
-  ScanFrustumCfg frustum{};
+  ScanFrustumCfg frustum;
   double query_aabb_inflate_m = 0.0; // inflate ECEF AABB for coarse DB query
+
+  SpatialIndexCfg index;   // <-- belongs here
 };
 
 struct SensorCfg {
@@ -163,6 +173,8 @@ struct SensorCfg {
   SensorType type = SensorType::UNKNOWN;
   ScanVolumeCfg scan{};
   double scan_rate_hz = 0.0;  // schedule hint
+
+
 };
 
 struct SensorsCfg {
