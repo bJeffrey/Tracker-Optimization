@@ -1,7 +1,7 @@
 #pragma once
 
-#include "index/rtree_sqlite.h"
-#include "index/spatial_index_3d.h"
+#include "rtree_sqlite.h"
+#include "spatial_index_3d.h"
 
 #include <cstddef>
 #include <cstdint>

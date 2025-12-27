@@ -4,7 +4,7 @@
  * @brief Loader for the tracker XML configuration set, with optional XSD validation.
  */
 
-#include "config/config_types.h"
+#include "config_types.h"
 #include <string>
 
 namespace cfg {

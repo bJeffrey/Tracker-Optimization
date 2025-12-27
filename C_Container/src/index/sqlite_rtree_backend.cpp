@@ -1,4 +1,4 @@
-#include "index/sqlite_rtree_backend.h"
+#include "sqlite_rtree_backend.h"
 
 #include <stdexcept>
 

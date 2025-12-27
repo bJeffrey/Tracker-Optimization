@@ -17,7 +17,7 @@
  */
 
 #include "track_batch.h"
-#include "config/config_types.h"
+#include "config_types.h"
 
 #include <string>
 

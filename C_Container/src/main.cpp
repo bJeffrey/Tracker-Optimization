@@ -19,20 +19,20 @@
 
 #include "la_batch_rw.h"
 
-#include "config/config_loader.h"
-#include "targets/targets_generator.h"
+#include "config_loader.h"
+#include "targets_generator.h"
 
 // Motion folder
-#include "motion/scenario_loop.hpp"
+#include "scenario_loop.hpp"
 
 // Index + scan volume
-#include "index/scan_volume.h"
+#include "scan_volume.h"
 
 // NEW: backend-agnostic spatial index + update policy
-#include "index/index_update_manager.h"
-#include "index/spatial_index_factory.h"
-#include "index/spatial_index_3d.h"
-#include "index/uniform_grid_index.h"
+#include "index_update_manager.h"
+#include "spatial_index_factory.h"
+#include "spatial_index_3d.h"
+#include "uniform_grid_index.h"
 
 #include "track_batch.h"
 
@@ -269,7 +269,6 @@ int main(int argc, char** argv) try {
 
     // Apply probe limit if backend supports it (UniformGridIndex)
     if (icfg.backend == "uniform_grid") {
-      // Requires: #include "index/uniform_grid_index.h" at top of file
       if (auto* grid = dynamic_cast<idx::UniformGridIndex*>(index.get())) {
         grid->SetDenseCellProbeLimit(sensor.scan.index.dense_cell_probe_limit);
       }

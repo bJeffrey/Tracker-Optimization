@@ -1,7 +1,7 @@
 #pragma once
 
-#include "index/rtree_sqlite.h"         // idx::EcefAabb
-#include "index/spatial_index_3d.h"     // idx::ISpatialIndex3D
+#include "rtree_sqlite.h"         // idx::EcefAabb
+#include "spatial_index_3d.h"     // idx::ISpatialIndex3D
 
 #include <cstddef>
 #include <cstdint>

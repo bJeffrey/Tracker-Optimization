@@ -1,4 +1,4 @@
-#include "config/xml_utils.h"
+#include "xml_utils.h"
 
 #include <stdexcept>
 #include <sstream>

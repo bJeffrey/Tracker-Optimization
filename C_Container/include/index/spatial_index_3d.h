@@ -1,6 +1,6 @@
 #pragma once
 
-#include "index/rtree_sqlite.h" // for idx::EcefAabb
+#include "rtree_sqlite.h" // for idx::EcefAabb
 
 #include <cstddef>
 #include <cstdint>

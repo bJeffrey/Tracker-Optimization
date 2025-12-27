@@ -1,6 +1,6 @@
-#include "targets/targets_generator.h"
+#include "targets_generator.h"
 
-#include "config/xml_utils.h"
+#include "xml_utils.h"
 
 #include <algorithm>
 #include <cmath>

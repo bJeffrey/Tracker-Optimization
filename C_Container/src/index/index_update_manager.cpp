@@ -1,4 +1,4 @@
-#include "index/index_update_manager.h"
+#include "index_update_manager.h"
 
 #include <cmath>
 #include <stdexcept>

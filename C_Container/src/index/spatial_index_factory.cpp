@@ -1,7 +1,7 @@
-#include "index/spatial_index_factory.h"
+#include "spatial_index_factory.h"
 
-#include "index/sqlite_rtree_backend.h"
-#include "index/uniform_grid_index.h"
+#include "sqlite_rtree_backend.h"
+#include "uniform_grid_index.h"
 
 #include <stdexcept>
 

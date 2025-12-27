@@ -18,9 +18,9 @@
 #include <cassert>
 #include <cmath>
 
-#include "motion/track_batch_soa.hpp"
-#include "motion/model_buckets.hpp"
-#include "motion/motion_models.hpp"
+#include "track_batch_soa.hpp"
+#include "model_buckets.hpp"
+#include "motion_models.hpp"
 
 namespace motion {
 

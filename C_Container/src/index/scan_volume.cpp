@@ -1,4 +1,4 @@
-#include "index/scan_volume.h"
+#include "scan_volume.h"
 
 #include <algorithm>
 #include <array>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "index/spatial_index_3d.h"
+#include "spatial_index_3d.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -15,7 +15,7 @@
 #include <vector>
 #include <cassert>
 
-#include "motion/track_batch_soa.hpp"
+#include "track_batch_soa.hpp"
 
 namespace motion {
 

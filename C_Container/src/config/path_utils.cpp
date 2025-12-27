@@ -1,4 +1,4 @@
-#include "config/path_utils.h"
+#include "path_utils.h"
 #include <filesystem>
 
 namespace fs = std::filesystem;

@@ -8,7 +8,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Default to Release if nothing specified (important for perf)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "No build type specified. Defaulting to Release.")
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
@@ -17,46 +16,58 @@ endif()
 # ------------------------------
 # Options
 # ------------------------------
-option(USE_MKL          "Use Intel MKL backend"               OFF)
-option(USE_STD          "Use baseline std backend (no Eigen/MKL)" OFF)
-option(ENABLE_OPENMP    "Enable OpenMP (outer parallel loops)" ON)
-option(ENABLE_LTO       "Try Link-Time Optimization (IPO)"     ON)
-option(EIGEN_DONT_PAR   "Disable Eigen internal parallelism"   ON)  # keeps Eigen single-threaded; we parallel outside
-option(ENABLE_CONFIG    "Build XML config loader tools (libxml2)" ON)
+option(USE_MKL          "Use Intel MKL backend"                    OFF)
+option(USE_STD          "Use baseline std backend (no Eigen/MKL)"  OFF)
+option(ENABLE_OPENMP    "Enable OpenMP (outer parallel loops)"     ON)
+option(ENABLE_LTO       "Try Link-Time Optimization (IPO)"         ON)
+option(EIGEN_DONT_PAR   "Disable Eigen internal parallelism"       ON)
+option(ENABLE_CONFIG    "Build XML config loader tools (libxml2)"  ON)
 
 # ------------------------------
-# Library target
+# Include directories
+# ------------------------------
+# Add subfolders so callers can write:
+#   #include "config_loader.h"
+#   #include "la_batch_rw.h"
+#   #include "track_batch_soa.hpp"
+# etc. (no folder prefixes)
+set(LA_PUBLIC_INCLUDE_DIRS
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/config
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/index
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/la
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/motion
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/targets
+)
+
+# ------------------------------
+# Library target: simple_la
 # ------------------------------
 add_library(simple_la STATIC)
-target_include_directories(simple_la PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(simple_la PUBLIC ${LA_PUBLIC_INCLUDE_DIRS})
 
-# Mildly aggressive but portable release flags (GCC/Clang)
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
   if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(simple_la PRIVATE -O3 -fno-math-errno -fno-trapping-math)
-    # Uncomment to tighten FP reproducibility (may reduce FMA fusion/perf)
-    # target_compile_options(simple_la PRIVATE -ffp-contract=off)
   endif()
 endif()
 
 # ------------------------------
-# Backend selection
+# Backend selection (Eigen / MKL / STD)
 # ------------------------------
-# NOTE: We now also compile the backend-selected fast RW batch update:
-#   P <- P + Q*dt   (full NxN; currently N=9 for CA9 integration)
 if (USE_STD)
   message(STATUS "Building with baseline STD backend (no Eigen/MKL)")
   target_sources(simple_la PRIVATE
-    src/la_std.cpp
-    src/la_batch_rw_std.cpp
+    src/la/la_std.cpp
+    src/la/la_batch_rw_std.cpp
   )
 
 elseif (USE_MKL)
   message(STATUS "Building with Intel MKL backend")
   find_package(MKL REQUIRED)
   target_sources(simple_la PRIVATE
-    src/la_mkl.cpp
-    src/la_batch_rw_mkl.cpp
+    src/la/la_mkl.cpp
+    src/la/la_batch_rw_mkl.cpp
   )
   target_link_libraries(simple_la PUBLIC MKL::MKL)
 
@@ -64,8 +75,8 @@ else()
   message(STATUS "Building with Eigen backend (default)")
   find_package(Eigen3 REQUIRED)
   target_sources(simple_la PRIVATE
-    src/la_eigen.cpp
-    src/la_batch_rw_eigen.cpp
+    src/la/la_eigen.cpp
+    src/la/la_batch_rw_eigen.cpp
   )
   target_link_libraries(simple_la PUBLIC Eigen3::Eigen)
   if (EIGEN_DONT_PAR)
@@ -87,7 +98,7 @@ if (ENABLE_OPENMP)
 endif()
 
 # ------------------------------
-# Link-Time Optimization (IPO/LTO) when available
+# Link-Time Optimization (IPO/LTO)
 # ------------------------------
 if (ENABLE_LTO)
   include(CheckIPOSupported)
@@ -102,7 +113,6 @@ endif()
 # ------------------------------
 # Config loader library (libxml2)
 # ------------------------------
-# NOTE: demo now loads + validates XML, so ENABLE_CONFIG must be ON for this integration step.
 if (ENABLE_CONFIG)
   message(STATUS "ENABLE_CONFIG=ON: building config_loader (libxml2) and config_check")
 
@@ -111,26 +121,24 @@ if (ENABLE_CONFIG)
     src/config/xml_utils.cpp
     src/config/path_utils.cpp
   )
-  target_include_directories(config_loader PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(config_loader PUBLIC ${LA_PUBLIC_INCLUDE_DIRS})
   target_include_directories(config_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-  # Prefer CMake's FindLibXml2; fallback to pkg-config if needed.
   find_package(LibXml2 QUIET)
   if (LibXml2_FOUND)
     target_include_directories(config_loader PRIVATE ${LIBXML2_INCLUDE_DIR})
-    # IMPORTANT: libxml2 must be PUBLIC so consumers of this static lib link correctly.
     target_link_libraries(config_loader PUBLIC ${LIBXML2_LIBRARIES})
     target_compile_definitions(config_loader PRIVATE HAVE_LIBXML2=1)
   else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
     target_include_directories(config_loader PRIVATE ${LIBXML2_INCLUDE_DIRS})
-    # IMPORTANT: libxml2 must be PUBLIC so consumers of this static lib link correctly.
     target_link_libraries(config_loader PUBLIC ${LIBXML2_LIBRARIES})
     target_compile_definitions(config_loader PRIVATE HAVE_LIBXML2=1)
   endif()
 
   add_executable(config_check src/config_check.cpp)
+  target_include_directories(config_check PRIVATE ${LA_PUBLIC_INCLUDE_DIRS})
   target_link_libraries(config_check PRIVATE config_loader)
 
   if (ENABLE_LTO AND TARGET config_check)
@@ -140,9 +148,8 @@ else()
   message(WARNING "ENABLE_CONFIG=OFF: config loader tools will not be built.")
 endif()
 
-
 # ------------------------------
-# Track spatial index (SQLite RTree) for coarse scan-volume queries
+# Track spatial index
 # ------------------------------
 find_package(SQLite3 REQUIRED)
 
@@ -154,20 +161,23 @@ add_library(track_index STATIC
   src/index/sqlite_rtree_backend.cpp
   src/index/spatial_index_factory.cpp
 )
-target_include_directories(track_index PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-#target_link_libraries(track_index PUBLIC SQLite::SQLite3)
-target_link_libraries(track_index PUBLIC sqlite3)
+target_include_directories(track_index PUBLIC ${LA_PUBLIC_INCLUDE_DIRS})
+if (TARGET SQLite::SQLite3)
+  target_link_libraries(track_index PUBLIC SQLite::SQLite3)
+else()
+  target_link_libraries(track_index PUBLIC sqlite3)
+endif()
 
 # ------------------------------
-# Demo executable (config-driven)
+# Demo executable
 # ------------------------------
 add_executable(demo
   src/main.cpp
   src/targets/targets_generator.cpp
 )
+target_include_directories(demo PRIVATE ${LA_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(demo PRIVATE simple_la track_index)
 
-# demo now depends on the XML config loader
 if (ENABLE_CONFIG)
   target_link_libraries(demo PRIVATE config_loader)
 else()

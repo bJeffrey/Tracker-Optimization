@@ -1,7 +1,7 @@
 #pragma once
 
-#include "config/config_types.h"
-#include "index/rtree_sqlite.h"
+#include "config_types.h"
+#include "rtree_sqlite.h"
 
 namespace idx {
 

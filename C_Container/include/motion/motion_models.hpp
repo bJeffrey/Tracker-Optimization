@@ -12,7 +12,7 @@
 #include <vector>
 #include <cmath>
 
-#include "motion/track_batch_soa.hpp"
+#include "track_batch_soa.hpp"
 
 namespace motion {
 
@@ -125,7 +125,7 @@ struct ModelSelector {
 
 } // namespace motion
 
-#include "motion/model_buckets.hpp"
+#include "model_buckets.hpp"
 
 namespace motion {
 

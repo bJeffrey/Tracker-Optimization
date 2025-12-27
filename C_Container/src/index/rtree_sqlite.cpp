@@ -7,7 +7,7 @@
 //   dropping and recreating the virtual table.
 // - This version keeps your prepared statements approach, but rebuilds by calling Reset().
 
-#include "index/rtree_sqlite.h"
+#include "rtree_sqlite.h"
 
 #include <sqlite3.h>
 

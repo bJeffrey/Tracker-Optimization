@@ -1,9 +1,9 @@
-#include "config/config_loader.h"
+#include "config_loader.h"
 
-#include "config/xml_utils.h"
+#include "xml_utils.h"
 
 #include <libxml/tree.h>
-#include "config/path_utils.h"
+#include "path_utils.h"
 
 #include <filesystem>
 #include <iostream>

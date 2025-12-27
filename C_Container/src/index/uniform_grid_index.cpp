@@ -1,4 +1,4 @@
-#include "index/uniform_grid_index.h"
+#include "uniform_grid_index.h"
 
 #include <cmath>
 #include <limits>

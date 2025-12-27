@@ -4,7 +4,7 @@
  *
  * This is intentionally separate from src/main.cpp to avoid disrupting the existing LA demo.
  */
-#include "config/config_loader.h"
+#include "config_loader.h"
 
 #include <iostream>
 #include <string>
