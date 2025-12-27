@@ -1,140 +1,54 @@
-Option B Plan: Persistent Motion-Model Buckets + Scenario Loop + Scan Tick
-=======================================================================
+Refined Next Steps Plan (Event-Driven Tracker + AER Measurements)
 
-Goal for this step
-------------------
-1) Run the scenario for a configured duration T_run_s
-2) At each tracker tick dt, propagate state + covariance using a per-track motion model
-3) At each scan tick (sensor schedule), run the coarse spatial query (RTree) against the track DB/index
-4) Keep it “plugin-like” and fast:
-   - no per-track virtual calls
-   - no passing big buffers by value
-   - persistent model buckets (tracks rarely change models)
+Step 0 — Naming + ownership split (clarity)
+1) Rename current sim-side SoA to a truth namespace/type:
+   - truth::TruthBatchSoA (authoritative truth kinematics)
+2) Establish tracker-side containers:
+   - trk::TrackBatchSoA (estimated state, SoA slab)
+   - trk::TrackMeta (track_id, status, quality, timestamps)
+   - trk::TrackCovBatch (P storage) — can remain interleaved batch at first
 
-Step 3A — Data model changes (TrackBatch + motion metadata)
------------------------------------------------------------
-Add to TrackBatch (minimal + future-proof):
-- model_id: per-track MotionModelId (e.g., CA9, CT)
-- bucket_slot: per-track index of this track inside its current bucket vector (for O(1) swap-remove)
-- CT parameters (initial set):
-  - ct_omega_z_radps: per-track turn-rate about +Z (rad/s)
+Step 1 — Time bookkeeping (event-driven foundation)
+3) Add per-track prediction time:
+   - t_pred_s[i] meaning state+cov aged to this time (recommended single timestamp)
+4) Replace “predict every dt for tracker” with:
+   - EnsurePredictedToTime(ids, t_event, flags)
+5) Keep truth sim loop (dt-based) only for generating truth and measurements.
 
-Notes:
-- Keep canonical state as CA9 interleaved: [x y z vx vy vz ax ay az] per track.
-- Keep hybrid SoA “hot columns” for queries: pos_x/pos_y/pos_z (maintained via sync_pos_from_x or inside propagation).
+Step 2 — Prediction (state + covariance) as reusable kernels
+6) Implement CA9 state prediction for subsets (SoA slab).
+7) Implement CA9 covariance prediction for subsets:
+   - preferred: P ← F P Fᵀ + Qd(dt)
+   - if deferring full FPFᵀ: keep RW as placeholder, but FLAG it as “not KF-correct”
+8) For CT tracks initially:
+   - predict state with CT model (already exists)
+   - predict covariance using CA9 predictor as a first approximation (baseline gating)
 
-Step 3B — Persistent bucket manager (Option B core)
----------------------------------------------------
-Create a small utility that owns the buckets and supports O(1) moves.
+Step 3 — Measurement generation in AER (truth → measurements)
+9) Add AER measurement generator:
+   - for each scan: from truth::TruthBatchSoA produce meas::ScanMeasAER
+   - include Pd, misses, clutter, noise
+10) Store measurement time t_scan and sensor id.
 
-ModelBuckets holds:
-- bucket_ca: vector<size_t> of track indices using CA9
-- bucket_ct: vector<size_t> of track indices using CT
+Step 4 — Gating in the right frames
+11) Coarse gate: spatial index AABB (ECEF) → candidate tracks.
+12) For those candidates:
+   - EnsurePredictedToTime(candidate_ids, t_scan, need_state=true, need_cov=true)
+13) Fine gate: compute z_pred_aer and S in AER; Mahalanobis gate.
 
-Operations:
-- InitFromTrackBatch(tb):
-  - clear buckets
-  - for each track i:
-    - push i into bucket for tb.model_id[i]
-    - set tb.bucket_slot[i] = position in that bucket
-- MoveTrack(tb, i, new_model):
-  - remove i from old bucket via swap-remove using tb.bucket_slot[i]
-  - push i into new bucket; update tb.bucket_slot[i]
-  - update tb.model_id[i]
+Step 5 — Association plugin architecture
+14) Define assoc::AssocProblem + assoc::IAssociator.
+15) Implement assoc::GnnAssociator first.
+16) Ensure the tracker calls associator via the interface only (no direct coupling).
 
-This enables rare model changes with minimal overhead.
+Step 6 — Track update + management + publish policy
+17) EKF update in AER for assigned tracks.
+18) Unassigned logic:
+   - misses → track score down
+   - clutter/spurious → tentative tracks with low quality
+19) Confirm/tentative rules + publish filter (“don’t publish low-confidence”).
 
-Step 3C — Motion model plugin API (library style)
--------------------------------------------------
-Define a motion model interface that is “plugin-like” but fast.
-
-IMotionModel:
-- MotionModelId id() const
-- const char* name() const
-- void Propagate(TrackBatch& tb,
-                const std::vector<std::size_t>& idx,
-                double dt_s,
-                const MotionContext& ctx)
-
-Design notes:
-- Propagate uses index lists (bucket vectors), not copied AoS structs.
-- MotionContext is small, passed by const ref (time, noise settings, etc.).
-
-Step 3D — Implement two models (CA9 + CT)
------------------------------------------
-1) CA9 (constant acceleration; canonical state propagation)
-State:
-- pos += vel*dt + 0.5*acc*dt^2
-- vel += acc*dt
-- acc unchanged
-
-Covariance (two-phase plan):
-Phase 1 (now, fast, consistent with current demo):
-- P += Q*dt  (random-walk style)
-
-Phase 2 (later):
-- P = F P F^T + Q with CA9 F (batched backend-by-backend)
-
-2) CT (constant turn) implemented as “CT-in-XY with ωz” (no state dimension change)
-State:
-- treat CT as velocity rotating in XY plane by θ = ω*dt (ω = ct_omega_z_radps[i])
-- update (vx, vy) by 2D rotation
-- update (x, y) accordingly (z axis continues straight / CA behavior)
-- (ax, ay, az) can remain as-is or be handled conservatively (initially keep as-is)
-
-This yields a real CT behavior while keeping your fixed 9D state vector.
-
-Step 3E — Model selection structure (MHT-ish, single-best-model for now)
------------------------------------------------------------------------
-Add a ModelSelector that can change models but stays simple initially.
-
-ModelSelector::UpdateModels(tb, buckets, t, dt)
-Initial behaviors:
-- default: all CA9
-- CT for subset of tracks based on:
-  - scenario config (e.g., fraction turning), OR
-  - simple heuristic (e.g., if |a_lat| > threshold => CT), OR
-  - scripted events from scenario XML (later)
-
-When a track changes model:
-- buckets.MoveTrack(tb, i, new_model)
-
-This mirrors MHT/IMM structure (model choice), but collapses to a single selected model per track.
-
-Step 3F — Scenario loop and scan tick
--------------------------------------
-Add a real time loop in the demo (or split into a tracker_driver later).
-
-Inputs:
-- T_run_s: total scenario duration
-- dt_s: tracker update tick
-- scan_rate_hz: from sensors schedule (fallback if missing)
-
-Loop:
-for (t = 0; t < T_run_s; t += dt_s):
-  1) selector: optionally update models (every tick or every N ticks)
-  2) propagate by bucket:
-     - CA.Propagate(tb, buckets.bucket_ca, dt_s, ctx)
-     - CT.Propagate(tb, buckets.bucket_ct, dt_s, ctx)
-  3) maintain query columns:
-     - tb.sync_pos_from_x() (or update pos_x/y/z inside propagation)
-  4) scan tick:
-     - if (t >= next_scan_time):
-         - build/update RTree from pos_x/y/z (or interleaved x with stride)
-         - compute scan AABB from first sensor (or iterate sensors)
-         - query candidates, store/print results
-         - next_scan_time += 1.0/scan_rate_hz
-
-Step 3G — “Done” checklist for this step
-----------------------------------------
-1) TrackBatch has: model_id, bucket_slot, ct_omega_z_radps (plus pos_x/y/z for query)
-2) ModelBuckets implemented and used (persistent buckets)
-3) IMotionModel interface added (plugin-style)
-4) MotionModel_CA9 and MotionModel_CT_XYOmega compiled and invoked
-5) Scenario loop runs for T_run_s with dt_s and scan ticks at scan_rate_hz
-6) No per-track virtual calls; no pass-by-value of large buffers
-
-Concrete implementation note
-----------------------------
-For CT, implement CT-in-XY with per-track ωz metadata. This is the cleanest way to get
-real turning behavior now without changing your 9D state dimension.
+Notes
+- Tracker estimate propagation is EVENT-DRIVEN (scan, offboard request, incoming remote track, etc.).
+- Truth simulation can remain dt-based for deterministic scenario generation.
+- Recommended consistency rule: state and covariance share the same “aged-to” timestamp (t_pred_s).
