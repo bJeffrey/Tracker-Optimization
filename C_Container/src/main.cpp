@@ -96,31 +96,32 @@ inline void build_motion_soa_from_track_batch(const TrackBatch& tb_in, motion::T
   tb_out.resize(tb_in.n_tracks);
 
   for (std::size_t i = 0; i < tb_in.n_tracks; ++i) {
-    tb_out.x[i] = tb_in.pos_x[i];
-    tb_out.y[i] = tb_in.pos_y[i];
-    tb_out.z[i] = tb_in.pos_z[i];
+    // positions from TrackBatch
+    tb_out.x(i) = tb_in.pos_x[i];
+    tb_out.y(i) = tb_in.pos_y[i];
+    tb_out.z(i) = tb_in.pos_z[i];
 
-    // deterministic pseudo-velocities (m/s), just to make things move
+    // deterministic pseudo-velocities (m/s)
     const double u0 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 1u));
     const double u1 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 2u));
     const double u2 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 3u));
-    tb_out.vx[i] = (u0 - 0.5) * 400.0;
-    tb_out.vy[i] = (u1 - 0.5) * 400.0;
-    tb_out.vz[i] = (u2 - 0.5) * 20.0;
+    tb_out.vx(i) = (u0 - 0.5) * 400.0;
+    tb_out.vy(i) = (u1 - 0.5) * 400.0;
+    tb_out.vz(i) = (u2 - 0.5) * 20.0;
 
-    tb_out.ax[i] = 0.0;
-    tb_out.ay[i] = 0.0;
-    tb_out.az[i] = 0.0;
+    // accelerations default to 0
+    tb_out.ax(i) = 0.0;
+    tb_out.ay(i) = 0.0;
+    tb_out.az(i) = 0.0;
 
-    // per-track omega_z (rad/s): make ~30% of tracks CT, rest CA
+    // ~30% CT, rest CA
     const double u3 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 4u));
     tb_out.ct_omega_z_radps[i] = (u3 < 0.3) ? ((u3 - 0.15) * 0.08) : 0.0;
 
     tb_out.model_id[i] = motion::MotionModelId::CA9;
   }
-
-  tb_out.sync_pos_from_state();
 }
+
 
 } // namespace
 
@@ -304,69 +305,67 @@ int main(int argc, char** argv) try {
 
 
     motion::run_scenario_loop(
-        tbm, buckets, model_ca, model_ct, selector, mcfg,
-        [&](const motion::TrackBatchSoA& tb_ref, double t_s) {
-          ++scan_count;
+    tbm, buckets, model_ca, model_ct, selector, mcfg,
+    [&](const motion::TrackBatchSoA& tb_ref, double t_s) {
+      ++scan_count;
 
-          static double update_acc = 0.0, query_acc = 0.0;
-          static double nupd_acc = 0.0;
-          static std::size_t k_acc = 0;
+      static double update_acc = 0.0, query_acc = 0.0;
+      static double nupd_acc   = 0.0;
+      static std::size_t k_acc = 0;
 
-          const auto t0 = std::chrono::high_resolution_clock::now();
-          upd.Apply(t_s, tb_ref.pos_x.data(), tb_ref.pos_y.data(), tb_ref.pos_z.data(), *index);
-          const auto t1 = std::chrono::high_resolution_clock::now();
-          auto ids = index->QueryAabb(scan_aabb);
-          const auto t2 = std::chrono::high_resolution_clock::now();
+      const auto t0 = std::chrono::high_resolution_clock::now();
+      upd.Apply(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), *index);
+      const auto t1 = std::chrono::high_resolution_clock::now();
+      auto ids = index->QueryAabb(scan_aabb);
+      const auto t2 = std::chrono::high_resolution_clock::now();
 
-          update_acc += std::chrono::duration<double>(t1 - t0).count();
-          query_acc  += std::chrono::duration<double>(t2 - t1).count();
-          nupd_acc   += static_cast<double>(upd.NumUpdatedLastApply());
-          k_acc++;
+      update_acc += std::chrono::duration<double>(t1 - t0).count();
+      query_acc  += std::chrono::duration<double>(t2 - t1).count();
+      nupd_acc   += static_cast<double>(upd.NumUpdatedLastApply());
+      ++k_acc;
 
-          // --- Scan-driven covariance aging (lazy): age only candidates to scan time t_s ---
-          // Reuse TrackBatch::last_update_s as "P-aged-to time" (per-track).
-          static std::vector<double> dt_ids;
-          
-           if (dt_ids.capacity() < ids.size()) dt_ids.reserve(ids.size());
-           dt_ids.resize(ids.size());
+      // --- Scan-driven covariance aging (lazy): age only candidates to scan time t_s ---
+      // Reuse TrackBatch::last_update_s as "P-aged-to time" (per-track).
+      if (!ids.empty()) {
+        static std::vector<double> dt_ids;
+        if (dt_ids.capacity() < ids.size()) dt_ids.reserve(ids.size());
+        dt_ids.resize(ids.size());
 
-          for (std::size_t k = 0; k < ids.size(); ++k) {
-            const std::size_t i = static_cast<std::size_t>(ids[k]);
+        for (std::size_t k = 0; k < ids.size(); ++k) {
+          const std::size_t i = static_cast<std::size_t>(ids[k]);
 
-            const double dt_i = t_s - tb.last_update_s[i];
-            dt_ids[k] = (dt_i > 0.0) ? dt_i : 0.0;
+          const double dt_i = t_s - tb.last_update_s[i];
+          dt_ids[k] = (dt_i > 0.0) ? dt_i : 0.0;
 
-            // Mark covariance as aged to scan time (even if dt_i <= 0, this is harmless)
-            tb.last_update_s[i] = t_s;
-          }
+          // Mark covariance as aged-to scan time (scan times should be monotonic)
+          tb.last_update_s[i] = t_s;
+        }
 
-          // Apply P += Q * dt_i for each candidate
-          const auto tc0 = std::chrono::high_resolution_clock::now();
+        const auto tc0 = std::chrono::high_resolution_clock::now();
+        la::rw_add_qdt_subset_var_dt(tb.P.data(), Q.data(), n,
+                                     ids.data(), dt_ids.data(), ids.size());
+        const auto tc1 = std::chrono::high_resolution_clock::now();
 
-          if (!ids.empty()) {
-            la::rw_add_qdt_subset_var_dt(tb.P.data(), Q.data(), n,
-                                         ids.data(), dt_ids.data(), ids.size());
-          }
+        cov_age_acc_s += std::chrono::duration<double>(tc1 - tc0).count();
+        ++cov_age_calls;
+        cov_age_tracks_acc += ids.size();
+      }
 
-          const auto tc1 = std::chrono::high_resolution_clock::now();
-          cov_age_acc_s += std::chrono::duration<double>(tc1 - tc0).count();
-          cov_age_calls++;
-          cov_age_tracks_acc += ids.size();
+      if (verbose && (k_acc % 5 == 0)) {
+        std::cout << "  avg_update_s=" << (update_acc / k_acc)
+                  << " avg_query_s="  << (query_acc / k_acc)
+                  << " avg_n_updated=" << (nupd_acc / k_acc)
+                  << "\n";
+      }
 
-          if (verbose && k_acc % 5 == 0) {
-            std::cout << "  avg_update_s=" << (update_acc / k_acc)
-                      << " avg_query_s="  << (query_acc / k_acc)
-                      << " avg_n_updated=" << (nupd_acc / k_acc)
-                      << "\n";
-          }
+      if (verbose && (scan_count <= 3 || (scan_count % 10 == 0))) {
+        std::cout << "  scan=" << scan_count
+                  << " t_s=" << t_s
+                  << " n_updated=" << upd.NumUpdatedLastApply()
+                  << " candidates=" << ids.size() << " / " << tb_ref.n << "\n";
+      }
+    });
 
-          if (verbose && scan_count <= 3 || (scan_count % 10 == 0)) {
-            std::cout << "  scan=" << scan_count
-                      << " t_s=" << t_s
-                      << " n_updated=" << upd.NumUpdatedLastApply()
-                      << " candidates=" << ids.size() << " / " << tb_ref.n << "\n";
-          }
-        });
 
     const auto loop_t1 = std::chrono::high_resolution_clock::now();
     const double loop_s = std::chrono::duration<double>(loop_t1 - loop_t0).count();

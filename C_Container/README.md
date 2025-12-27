@@ -237,7 +237,7 @@ cmake --build build -j
 
 4) **Run binaries inside the container**
 ```bash
-./build/demo --config ./config/system.xml --xsd-dir ./schemas
+./build/demo --config ./config/system.xml --xsd-dir ./schemas --verbose
 ./build/config_check --config ./config/system.xml --xsd-dir ./schemas
 ```
 

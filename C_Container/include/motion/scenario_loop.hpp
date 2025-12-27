@@ -11,12 +11,12 @@
 //     * optional model selection update
 //     * propagate by bucket: CA bucket, CT bucket, etc.
 // - Each scan tick:
-//     * build/update your spatial index from SoA position columns (or x/y/z)
-//     * query candidates for the current scan volume (AABB), etc.
+//     * build/update your spatial index from SoA x/y/z (slab) and query candidates (AABB), etc.
 
 #pragma once
 
 #include <cassert>
+#include <cmath>
 
 #include "motion/track_batch_soa.hpp"
 #include "motion/model_buckets.hpp"
@@ -41,31 +41,45 @@ inline void run_scenario_loop(TrackBatchSoA& tb,
 {
     assert(cfg.dt_s > 0.0);
     assert(cfg.scan_rate_hz > 0.0);
+    assert(cfg.T_run_s >= 0.0);
+
+    constexpr double eps = 1e-12;
 
     MotionContext ctx{};
+    const double scan_dt = 1.0 / cfg.scan_rate_hz;
     double next_scan_time = 0.0;
 
-    for (double t = 0.0; t < cfg.T_run_s; t += cfg.dt_s) {
-      ctx.t_s = t;
+    // Helper: emit all scans due up to time t_now (inclusive w/ epsilon)
+    auto emit_scans_up_to = [&](double t_now) {
+        while (next_scan_time <= cfg.T_run_s + eps && next_scan_time <= t_now + eps) {
+            // State is assumed to already represent "current time t_now"
+            // (in this loop, scans are emitted before propagation, so state is at time t)
+            on_scan_tick(tb, next_scan_time);
+            next_scan_time += scan_dt;
+        }
+    };
 
-      // 0) scan tick(s) due at time t (state is "at t" here)
-      while ((next_scan_time <= cfg.T_run_s + 1e-12) && (t + 1e-12 >= next_scan_time)) {
-          tb.sync_pos_from_state();          // ensure query columns match the state at time t
-          on_scan_tick(tb, next_scan_time);  // pass the scan time
-          next_scan_time += 1.0 / cfg.scan_rate_hz;
-      }
+    // Main loop: state is at time t at loop top.
+    for (double t = 0.0; t < cfg.T_run_s - eps; t += cfg.dt_s) {
+        ctx.t_s = t;
 
-      // 1) optional model update
-      selector.update_models(tb, buckets);
+        // 0) scan tick(s) due at time t (state is "at t" here)
+        emit_scans_up_to(t);
 
-      // 2) propagate by bucket from t -> t+dt
-      if (!buckets.bucket_ca.empty()) model_ca.propagate(tb, buckets.bucket_ca, cfg.dt_s, ctx);
-      if (!buckets.bucket_ct.empty()) model_ct.propagate(tb, buckets.bucket_ct, cfg.dt_s, ctx);
+        // 1) optional model update (still at time t)
+        selector.update_models(tb, buckets);
 
-      // 3) (optional) keep query columns synced after propagation too
-      // tb.sync_pos_from_state();
-   }
+        // 2) propagate by bucket from t -> t+dt
+        if (!buckets.bucket_ca.empty()) model_ca.propagate(tb, buckets.bucket_ca, cfg.dt_s, ctx);
+        if (!buckets.bucket_ct.empty()) model_ct.propagate(tb, buckets.bucket_ct, cfg.dt_s, ctx);
 
+        // (No sync_pos_from_state needed in slab SoA; index reads x/y/z directly)
+    }
+
+    // Final flush: ensure we emit scans that occur after the last dt tick but <= T_run_s.
+    // State here is effectively at (approximately) T_run_s, but even if slightly under,
+    // the scan time passed into callback is authoritative.
+    emit_scans_up_to(cfg.T_run_s);
 }
 
 } // namespace motion
