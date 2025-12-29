@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <vector>
 
+namespace trk {
+
 struct TrackBatch
 {
   static constexpr int kDim  = 9;
@@ -24,7 +26,7 @@ struct TrackBatch
   // --- Metadata ---
   std::vector<std::uint64_t> track_id;
   std::vector<double>        last_update_s;     // last measurement/track update time (future)
-  std::vector<double>        last_cov_prop_s;   // NEW: last time covariance was propagated to
+  std::vector<double>        last_cov_prop_s;   // used as t_pred_s (state+cov aged-to time)
   std::vector<TrackStatus>   status;
   std::vector<float>         quality;
 
@@ -36,9 +38,6 @@ struct TrackBatch
   std::vector<double> pos_x;
   std::vector<double> pos_y;
   std::vector<double> pos_z;
-
-  // (Optional later)
-  // std::vector<double> vel_x, vel_y, vel_z;
 
   // --- Covariance ---
   std::vector<double> P;
@@ -68,8 +67,6 @@ struct TrackBatch
   double* P_ptr(std::size_t i) { return P.data() + i * static_cast<std::size_t>(kCovN); }
   const double* P_ptr(std::size_t i) const { return P.data() + i * static_cast<std::size_t>(kCovN); }
 
-  // Keep SoA position columns consistent with interleaved x.
-  // Call this after any operation that modifies x[*][0..2] in bulk.
   void sync_pos_from_x()
   {
     const std::size_t stride = static_cast<std::size_t>(kDim);
@@ -81,10 +78,6 @@ struct TrackBatch
     }
   }
 
-
-
-  // Optional: if you ever update pos_x/pos_y/pos_z directly (not recommended),
-  // you can push them back into x:
   void sync_x_pos_from_pos()
   {
     const std::size_t stride = static_cast<std::size_t>(kDim);
@@ -109,3 +102,5 @@ struct TrackBatch
     }
   }
 };
+
+} // namespace trk

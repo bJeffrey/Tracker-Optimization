@@ -1,20 +1,19 @@
-// include/motion/motion_models.hpp
-// Motion model interfaces + two starter models: CA9 and CT-in-XY with per-track omega_z.
-//
-// Key performance intent:
-// - Execute by bucket (a contiguous index list) to avoid per-track branching.
-// - "Plugin-like" interface is acceptable because it's called once per bucket, not per track.
-// - Later, replace the scalar hot loops with backend-dispatched batch kernels (MKL/Eigen/STD).
-
 #pragma once
+/**
+ * @file motion_models.hpp
+ * @brief Motion model interfaces + two starter models: CA9 and CT-in-XY with per-track omega_z.
+ *
+ * Key intent:
+ * - Execute by bucket (contiguous index list) to avoid per-track branching.
+ */
 
 #include <cstddef>
 #include <vector>
 #include <cmath>
 
-#include "track_batch_soa.hpp"
+#include "trk/track_kinematics_batch.hpp"
 
-namespace motion {
+namespace trk {
 
 // Light-weight context that can grow over time.
 struct MotionContext {
@@ -27,7 +26,7 @@ struct IMotionModel {
   virtual const char* name() const = 0;
 
   // idx: indices of tracks to propagate
-  virtual void propagate(TrackBatchSoA& tb,
+  virtual void propagate(TrackKinematicsBatch& tb,
                          const std::vector<std::size_t>& idx,
                          double dt_s,
                          const MotionContext& ctx) const = 0;
@@ -40,7 +39,7 @@ struct MotionModel_CA9 final : IMotionModel {
   MotionModelId id() const override { return MotionModelId::CA9; }
   const char* name() const override { return "CA9"; }
 
-  void propagate(TrackBatchSoA& tb,
+  void propagate(TrackKinematicsBatch& tb,
                  const std::vector<std::size_t>& idx,
                  double dt_s,
                  const MotionContext&) const override
@@ -66,15 +65,15 @@ struct MotionModel_CA9 final : IMotionModel {
 
 //===============================
 // CT in XY using per-track omega_z (rad/s); fixed 9D state.
-// - updates x,y using exact integration for constant turn-rate (omega) with initial velocity
+// - updates x,y using exact integration for constant turn-rate
 // - rotates vx,vy by theta = omega*dt
-// - z axis uses CA9-like update with existing az
+// - z axis uses CA-like update with existing az
 //===============================
 struct MotionModel_CT_XY_OmegaZ final : IMotionModel {
   MotionModelId id() const override { return MotionModelId::CT_XY_OMEGAZ; }
   const char* name() const override { return "CT_XY_OmegaZ"; }
 
-  void propagate(TrackBatchSoA& tb,
+  void propagate(TrackKinematicsBatch& tb,
                  const std::vector<std::size_t>& idx,
                  double dt_s,
                  const MotionContext&) const override
@@ -102,7 +101,7 @@ struct MotionModel_CT_XY_OmegaZ final : IMotionModel {
       const double c = std::cos(theta);
       const double s = std::sin(theta);
 
-      // exact integration for constant turn with constant speed in XY
+      // exact integration for constant turn in XY
       tb.x(i) += (vx0 * s + vy0 * (1.0 - c)) / w;
       tb.y(i) += (vy0 * s - vx0 * (1.0 - c)) / w;
 
@@ -120,24 +119,25 @@ struct MotionModel_CT_XY_OmegaZ final : IMotionModel {
 // Replace with IMM, heuristic, or scenario-defined selection later.
 //===============================
 struct ModelSelector {
-  inline void update_models(TrackBatchSoA& tb, class ModelBuckets& buckets) const;
+  inline void update_models(TrackKinematicsBatch& tb, class ModelBuckets& buckets) const;
 };
 
-} // namespace motion
+} // namespace trk
 
 #include "model_buckets.hpp"
 
-namespace motion {
+namespace trk {
 
-inline void ModelSelector::update_models(TrackBatchSoA& tb, ModelBuckets& buckets) const {
+inline void ModelSelector::update_models(TrackKinematicsBatch& tb, ModelBuckets& buckets) const {
   for (std::size_t i = 0; i < tb.n; ++i) {
-    const MotionModelId desired = (std::abs(tb.ct_omega_z_radps[i]) > 0.0)
-                               ? MotionModelId::CT_XY_OMEGAZ
-                               : MotionModelId::CA9;
+    const MotionModelId desired =
+        (std::abs(tb.ct_omega_z_radps[i]) > 0.0) ? MotionModelId::CT_XY_OMEGAZ
+                                                : MotionModelId::CA9;
+
     if (tb.model_id[i] != desired) {
       buckets.move_track(tb, i, desired);
     }
   }
 }
 
-} // namespace motion
+} // namespace trk

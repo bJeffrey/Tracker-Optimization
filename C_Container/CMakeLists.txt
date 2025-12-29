@@ -26,18 +26,25 @@ option(ENABLE_CONFIG    "Build XML config loader tools (libxml2)"  ON)
 # ------------------------------
 # Include directories
 # ------------------------------
-# Add subfolders so callers can write:
+# We keep the prior "flat include" style working:
 #   #include "config_loader.h"
 #   #include "la_batch_rw.h"
-#   #include "track_batch_soa.hpp"
-# etc. (no folder prefixes)
+#   #include "scan_volume.h"
+# while also supporting the new foldered style:
+#   #include "sim/targets_generator.h"
+#   #include "trk/track_batch.h"
 set(LA_PUBLIC_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/assoc
   ${CMAKE_CURRENT_SOURCE_DIR}/include/config
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/gate
   ${CMAKE_CURRENT_SOURCE_DIR}/include/index
   ${CMAKE_CURRENT_SOURCE_DIR}/include/la
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/meas
   ${CMAKE_CURRENT_SOURCE_DIR}/include/motion
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/sim
   ${CMAKE_CURRENT_SOURCE_DIR}/include/targets
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/trk
 )
 
 # ------------------------------
@@ -169,14 +176,33 @@ else()
 endif()
 
 # ------------------------------
+# sim / trk libraries (truth vs tracker-owned)
+# ------------------------------
+
+# sim: truth + generators (no tracker dependency)
+add_library(sim_lib STATIC
+  src/sim/targets_generator.cpp
+)
+target_include_directories(sim_lib PUBLIC ${LA_PUBLIC_INCLUDE_DIRS})
+if (ENABLE_CONFIG)
+  target_link_libraries(sim_lib PUBLIC config_loader)  # uses cfg::xmlu
+endif()
+
+# trk: tracker-owned helpers (seeding, etc.)
+add_library(trk_lib STATIC
+  src/trk/seed_tracks_from_xml.cpp
+)
+target_include_directories(trk_lib PUBLIC ${LA_PUBLIC_INCLUDE_DIRS})
+target_link_libraries(trk_lib PUBLIC sim_lib)
+
+# ------------------------------
 # Demo executable
 # ------------------------------
 add_executable(demo
   src/main.cpp
-  src/targets/targets_generator.cpp
 )
 target_include_directories(demo PRIVATE ${LA_PUBLIC_INCLUDE_DIRS})
-target_link_libraries(demo PRIVATE simple_la track_index)
+target_link_libraries(demo PRIVATE simple_la track_index sim_lib trk_lib)
 
 if (ENABLE_CONFIG)
   target_link_libraries(demo PRIVATE config_loader)

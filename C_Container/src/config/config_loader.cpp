@@ -355,25 +355,96 @@ static PersistenceCfg parse_persistence(void* doc) {
   return p;
 }
 
-static ScenarioCatalog parse_scenario_catalog(void* doc) {
+static ScenarioCatalog parse_scenario_catalog(void* doc_void) {
   ScenarioCatalog out;
-  auto nodes = xmlu::FindNodes(doc, "ScenarioCatalog/Scenario");
-  for (void* n : nodes) {
-    Scenario s;
-    s.id = xmlu::NodeGetAttr(n, "id");
-    if (s.id.empty()) throw std::runtime_error("ScenarioCatalog/Scenario missing id attribute.");
-    s.name = xmlu::NodeGetTextChild(n, "Name");
 
-    // Refs
-    // Again, minimal parsing without XPath: use NodeGetTextChild for base_dir? baseDir is attribute.
-    // We'll read baseDir attr on the <Refs> child node directly.
-    // Locate <Refs> child:
-    // We don't have a Node->child finder here; for minimal, read through doc helper paths (works only if single scenario).
-    out.by_id[s.id] = s;
+  auto nodes = xmlu::FindNodes(doc_void, "ScenarioCatalog/Scenario");
+  if (nodes.empty()) {
+    throw std::runtime_error("No ScenarioCatalog/Scenario entries found.");
   }
-  if (out.by_id.empty()) throw std::runtime_error("No Scenario entries found.");
+
+  auto node_name_eq = [](xmlNodePtr n, const char* name) -> bool {
+    return n && n->type == XML_ELEMENT_NODE && n->name &&
+           (std::string(reinterpret_cast<const char*>(n->name)) == name);
+  };
+
+  auto get_attr = [](xmlNodePtr n, const char* attr) -> std::string {
+    if (!n) return {};
+    xmlChar* v = xmlGetProp(n, reinterpret_cast<const xmlChar*>(attr));
+    if (!v) return {};
+    std::string s(reinterpret_cast<const char*>(v));
+    xmlFree(v);
+    return s;
+  };
+
+  auto find_child = [&](xmlNodePtr parent, const char* child_name) -> xmlNodePtr {
+    if (!parent) return nullptr;
+    for (xmlNodePtr c = parent->children; c; c = c->next) {
+      if (node_name_eq(c, child_name)) return c;
+    }
+    return nullptr;
+  };
+
+  auto trim_in_place = [](std::string& s) {
+    auto is_ws = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) s.pop_back();
+  };
+
+  auto child_text = [&](xmlNodePtr parent, const char* child_name) -> std::string {
+    xmlNodePtr c = find_child(parent, child_name);
+    if (!c) return {};
+    xmlChar* txt = xmlNodeGetContent(c);
+    std::string s = txt ? reinterpret_cast<const char*>(txt) : "";
+    if (txt) xmlFree(txt);
+    trim_in_place(s);
+    return s;
+  };
+
+  for (void* n_void : nodes) {
+    xmlNodePtr scen = reinterpret_cast<xmlNodePtr>(n_void);
+
+    Scenario s{};
+    s.id = get_attr(scen, "id");
+    if (s.id.empty()) {
+      throw std::runtime_error("ScenarioCatalog/Scenario missing id attribute.");
+    }
+    s.name = child_text(scen, "Name");
+
+    // ---- Refs ----
+    if (xmlNodePtr refs = find_child(scen, "Refs")) {
+      s.refs.base_dir = get_attr(refs, "baseDir");
+
+      if (xmlNodePtr own = find_child(refs, "Ownship")) {
+        s.refs.ownship_href = get_attr(own, "href");
+      }
+      if (xmlNodePtr tgt = find_child(refs, "Targets")) {
+        s.refs.targets_source_type = get_attr(tgt, "sourceType");
+        s.refs.targets_href        = get_attr(tgt, "href");
+      }
+    }
+
+    // ---- LoadPolicy ----
+    if (xmlNodePtr lp = find_child(scen, "LoadPolicy")) {
+      if (xmlNodePtr ifdb = find_child(lp, "IfDatabasePopulated")) {
+        s.load_policy.if_db_populated_action = get_attr(ifdb, "action");
+      }
+
+      // Optional: if your Scenario struct has somewhere to store these later,
+      // you can parse OnCliFlag nodes here. For now you said it’s OK to defer.
+      //
+      // Example:
+      // for (xmlNodePtr c = lp->children; c; c = c->next) {
+      //   if (node_name_eq(c, "OnCliFlag")) { ... }
+      // }
+    }
+
+    out.by_id[s.id] = std::move(s);
+  }
+
   return out;
 }
+
 
 static Ownship parse_ownship(void* doc) {
   Ownship o;
@@ -531,33 +602,30 @@ if (!bundle.paths.sensors_xml.empty()) {
     xmlu::FreeXmlDoc(sc_doc);
     throw;
   }
+  xmlu::FreeXmlDoc(sc_doc);
 
   auto it_s = sc.by_id.find(bundle.system.active.scenario_id);
   if (it_s == sc.by_id.end()) {
-    xmlu::FreeXmlDoc(sc_doc);
     throw std::runtime_error("Active Scenario id not found: " + bundle.system.active.scenario_id);
   }
 
-  // Minimal extraction for scenario refs (assumes single scenario or that doc helper paths find first match).
-  // For now, support a single scenario file (common in early prototypes).
-  Scenario s = it_s->second;
-  s.refs.base_dir = xmlu::GetAttr(sc_doc, "ScenarioCatalog/Scenario/Refs", "baseDir");
-  s.refs.ownship_href = xmlu::GetAttr(sc_doc, "ScenarioCatalog/Scenario/Refs/Ownship", "href");
-  s.refs.targets_source_type = xmlu::GetAttr(sc_doc, "ScenarioCatalog/Scenario/Refs/Targets", "sourceType");
-  s.refs.targets_href = xmlu::GetAttr(sc_doc, "ScenarioCatalog/Scenario/Refs/Targets", "href");
-  s.load_policy.if_db_populated_action = xmlu::GetAttr(sc_doc, "ScenarioCatalog/Scenario/LoadPolicy/IfDatabasePopulated", "action");
-
-  // optional OnCliFlag list not parsed yet (can be added with XPath later)
-  bundle.scenario = s;
-  xmlu::FreeXmlDoc(sc_doc);
+  bundle.scenario = it_s->second;
 
   if (bundle.scenario.refs.ownship_href.empty() || bundle.scenario.refs.targets_href.empty()) {
-    throw std::runtime_error("Scenario is missing Ownship/Targets href.");
+    throw std::runtime_error("Scenario '" + bundle.scenario.id + "' is missing Ownship/Targets href.");
   }
 
   // Resolve ownship and targets relative to scenario file and its baseDir (NOT system baseDir)
-  bundle.paths.ownship_xml = pathu::ResolveHref(bundle.paths.scenario_xml, bundle.scenario.refs.base_dir, bundle.scenario.refs.ownship_href);
-  bundle.paths.targets_xml = pathu::ResolveHref(bundle.paths.scenario_xml, bundle.scenario.refs.base_dir, bundle.scenario.refs.targets_href);
+  bundle.paths.ownship_xml = pathu::ResolveHref(
+      bundle.paths.scenario_xml,
+      bundle.scenario.refs.base_dir,
+      bundle.scenario.refs.ownship_href);
+
+  bundle.paths.targets_xml = pathu::ResolveHref(
+      bundle.paths.scenario_xml,
+      bundle.scenario.refs.base_dir,
+      bundle.scenario.refs.targets_href);
+
 
   // 8) ownship.xml
   void* ow_doc = xmlu::ReadXmlDocOrThrow(bundle.paths.ownship_xml);
