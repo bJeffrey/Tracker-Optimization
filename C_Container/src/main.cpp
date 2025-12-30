@@ -18,31 +18,34 @@
  *    spatial index backend (SQLite RTree or UniformGridIndex).
  */
 
-#include "la_batch_rw.h"
-#include "config_loader.h"
+// Config system
+#include "config/config_loader.h"
 
-// sim truth generation (truth-only)
-#include "sim/targets_generator.h"
-#include "sim/target_truth.h"
+// Plugin Framework
+//#include "plugin_framework/plugin_interfaces.h"
+//#include "plugin_framework/plugin_registry.h"
 
-// tracker seeding (explicit bridge, tracker-owned)
-#include "trk/seed_tracks_from_xml.h"
-#include "trk/track_batch.h"
+// Propagator plugin (LA backend)
+#include "plugins/propagator/la_batch_rw.h"
 
-// Motion loop scaffold (namespace is trk:: in your updated headers)
-#include "scenario_loop.hpp"
+// Simulation plugin (truth generation)
+#include "plugins/simulation/targets_generator.h"
+#include "plugins/simulation/target_truth.h"
 
-// Index + scan volume
-#include "scan_volume.h"
+// Track Management plugin (seeding, batch operations)
+#include "plugins/track_mgmt/seed_tracks_from_xml.h"
+#include "plugins/track_mgmt/track_batch.h"
+#include "plugins/track_mgmt/track_kinematics_batch.hpp"
 
-// Spatial index + update policy
-#include "index_update_manager.h"
-#include "spatial_index_factory.h"
-#include "spatial_index_3d.h"
-#include "uniform_grid_index.h"
+// Database plugin (spatial indexing)
+#include "plugins/database/scan_volume.h"
+#include "plugins/index/index_update_manager.h"
+#include "plugins/index/spatial_index_factory.h"
+#include "plugins/index/spatial_index_3d.h"
+#include "plugins/index/uniform_grid_index.h"
 
-// Kinematics batch (used explicitly below)
-#include "trk/track_kinematics_batch.hpp"
+// Motion models (shared utilities)
+#include "motion/scenario_loop.hpp"
 
 #include <algorithm>
 #include <chrono>
