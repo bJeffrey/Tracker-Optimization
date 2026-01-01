@@ -1,9 +1,9 @@
 #pragma once
 #include "plugin_framework/plugin_interfaces.h"
-#include "trk/track_meta.h"  // Your existing track types
+#include "plugins/track_mgmt/track_meta.h"  // Your existing track types
 #include "index/scan_volume.h"
 
-namespace tracker::plugins {
+namespace trk::plugins {
 
 class ISpatialIndex : public IPlugin {
 public:
@@ -19,4 +19,4 @@ public:
     virtual std::vector<Track> queryBatch(const ScanVolume& volume) = 0;
 };
 
-} // namespace tracker::plugins
+} // namespace trk::plugins

@@ -1,6 +1,6 @@
 #pragma once
 #include "target_truth.h"
-#include "trk/track_batch.h"
+#include "plugins/track_mgmt/track_batch.h"
 #include <string>
 
 namespace trk {

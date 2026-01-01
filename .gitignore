@@ -6,3 +6,4 @@ docs/xfer.ngzip
 docs/xfer/architecture_v0.png
 docs/xfer/la_overview.txt
 C_Container/build/*
+/C_Container/output

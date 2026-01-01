@@ -1,4 +1,4 @@
-#include "trk/seed_tracks_from_xml.h"
+#include "plugins/track_mgmt/seed_tracks_from_xml.h"
 #include "xml_utils.h"
 #include "track_status.h"
 

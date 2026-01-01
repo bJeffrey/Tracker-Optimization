@@ -1,8 +1,14 @@
 #pragma once
 #include "plugin_framework/plugin_interfaces.h"
-#include "la/la.h"  // Your existing LA types
+#include "plugins/propagator/la.h"  // Backend-agnostic matrix views
 
-namespace tracker::plugins {
+#include <vector>
+
+namespace trk::plugins {
+
+// Backend-agnostic views (row-major). Treat vectors as n x 1 MatrixView.
+using VectorXd = la::MatrixView;
+using MatrixXd = la::MatrixView;
 
 class IPropagator : public IPlugin {
 public:
@@ -22,4 +28,4 @@ public:
     virtual void setProcessNoise(const MatrixXd& Q) = 0;
 };
 
-} // namespace tracker::plugins
+} // namespace trk::plugins

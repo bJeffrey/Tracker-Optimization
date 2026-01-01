@@ -18,42 +18,20 @@
  *    spatial index backend (SQLite RTree or UniformGridIndex).
  */
 
-// Config system
-#include "config/config_loader.h"
-
-// Plugin Framework
-//#include "plugin_framework/plugin_interfaces.h"
-//#include "plugin_framework/plugin_registry.h"
-
-// Propagator plugin (LA backend)
-#include "plugins/propagator/la_batch_rw.h"
-
-// Simulation plugin (truth generation)
-#include "plugins/simulation/targets_generator.h"
-#include "plugins/simulation/target_truth.h"
-
-// Track Management plugin (seeding, batch operations)
-#include "plugins/track_mgmt/seed_tracks_from_xml.h"
-#include "plugins/track_mgmt/track_batch.h"
-#include "plugins/track_mgmt/track_kinematics_batch.hpp"
-
-// Database plugin (spatial indexing)
-#include "plugins/database/scan_volume.h"
-#include "plugins/index/index_update_manager.h"
-#include "plugins/index/spatial_index_factory.h"
-#include "plugins/index/spatial_index_3d.h"
-#include "plugins/index/uniform_grid_index.h"
-
-// Motion models (shared utilities)
-#include "motion/scenario_loop.hpp"
+// Unified include surface
+#include "tracker.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -100,6 +78,47 @@ double checksum(const std::vector<double>& v) {
   long double acc = 0.0L;
   for (double x : v) acc += static_cast<long double>(x);
   return static_cast<double>(acc);
+}
+
+bool ensure_output_dir(const std::string& dir) {
+  if (dir.empty()) return false;
+  std::error_code ec;
+  fs::create_directories(fs::path(dir), ec);
+  return !ec;
+}
+
+std::tm local_tm_now() {
+  const std::time_t t = std::time(nullptr);
+  std::tm tm{};
+#if defined(_WIN32)
+  localtime_s(&tm, &t);
+#else
+  localtime_r(&t, &tm);
+#endif
+  return tm;
+}
+
+std::string format_tm(const std::tm& tm, const char* fmt) {
+  std::ostringstream oss;
+  oss << std::put_time(&tm, fmt);
+  return oss.str();
+}
+
+std::string read_xml_version_attr(const std::string& path) {
+  std::ifstream in(path);
+  if (!in) return "";
+  std::string line;
+  while (std::getline(in, line)) {
+    const std::string key = "version=";
+    const std::size_t pos = line.find(key);
+    if (pos == std::string::npos) continue;
+    const std::size_t q1 = line.find('"', pos + key.size());
+    if (q1 == std::string::npos) continue;
+    const std::size_t q2 = line.find('"', q1 + 1);
+    if (q2 == std::string::npos) continue;
+    return line.substr(q1 + 1, q2 - q1 - 1);
+  }
+  return "";
 }
 
 // Deterministic "cheap RNG" inlined (no <random>) for initializing demo velocities/omegas.
@@ -167,6 +186,9 @@ int main(int argc, char** argv) try {
   const double cell_m_cli             = arg_double(argc, argv, "--cell-m", 0.0); // 0 => no override
   const double d_th_m_cli             = arg_double(argc, argv, "--dth-m",  0.0); // 0 => no override
   const double t_max_s_cli            = arg_double(argc, argv, "--tmax-s", 0.0); // 0 => no override
+
+  // Output controls
+  const std::string output_dir = arg_value(argc, argv, "--output-dir", "./output");
 
   // printing
   const bool verbose = has_flag(argc, argv, "--verbose");
@@ -282,8 +304,16 @@ int main(int argc, char** argv) try {
   std::size_t cov_age_calls = 0;
   std::size_t cov_age_tracks_acc = 0;
 
+  // Scan loop stats (optional)
+  std::size_t scan_count = 0;
+  double loop_s = 0.0;
+  double update_acc = 0.0;
+  double query_acc = 0.0;
+  double nupd_acc = 0.0;
+  std::size_t k_acc = 0;
+
   // ------------------------------------------------------------
-  // Step 3A–3F: Motion loop + scan-tick coarse query via pluggable index backend.
+  // Step 3A-3F: Motion loop + scan-tick coarse query via pluggable index backend.
   // ------------------------------------------------------------
   if (!gen_only && cfg.has_sensors && !cfg.sensors.sensors.empty()) {
     const cfg::SensorCfg& sensor = cfg.sensors.sensors.front();
@@ -369,17 +399,12 @@ int main(int argc, char** argv) try {
                 << " (used by update manager; backend may rebuild)\n";
     }
 
-    std::size_t scan_count = 0;
     const auto loop_t0 = std::chrono::high_resolution_clock::now();
 
     trk::run_scenario_loop(
       tbm, buckets, model_ca, model_ct, selector, mcfg,
       [&](trk::TrackKinematicsBatch& tb_ref, double t_s) {
         ++scan_count;
-
-        static double update_acc = 0.0, query_acc = 0.0;
-        static double nupd_acc   = 0.0;
-        static std::size_t k_acc = 0;
 
         const auto t0 = std::chrono::high_resolution_clock::now();
         upd.Apply(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), *index);
@@ -435,7 +460,7 @@ int main(int argc, char** argv) try {
       });
 
     const auto loop_t1 = std::chrono::high_resolution_clock::now();
-    const double loop_s = std::chrono::duration<double>(loop_t1 - loop_t0).count();
+    loop_s = std::chrono::duration<double>(loop_t1 - loop_t0).count();
 
     std::cout << "  loop_time_s=" << loop_s << " scans=" << scan_count << "\n\n";
   } else {
@@ -451,6 +476,83 @@ int main(int argc, char** argv) try {
               << " checksum " << checksum(tb.P) << "\n";
   } else {
     std::cout << "Propagation skipped (--gen-only)\n";
+  }
+
+  // Write performance metrics to CSV (single-row, time-stamped per run)
+  if (ensure_output_dir(output_dir)) {
+    const std::tm run_tm = local_tm_now();
+    const std::string date_str = format_tm(run_tm, "%Y-%m-%d");
+    const std::string time_str = format_tm(run_tm, "%H:%M:%S");
+    const std::string version_str = read_xml_version_attr(system_xml);
+    const std::string version = version_str.empty() ? "unknown" : version_str;
+
+    const std::string csv_path =
+      (fs::path(output_dir) / ("performance_" + format_tm(run_tm, "%Y%m%d_%H%M%S") + ".csv")).string();
+    std::ofstream out(csv_path, std::ios::trunc);
+    if (out) {
+      const double avg_update_s = (k_acc ? (update_acc / k_acc) : 0.0);
+      const double avg_query_s = (k_acc ? (query_acc / k_acc) : 0.0);
+      const double avg_n_updated = (k_acc ? (nupd_acc / k_acc) : 0.0);
+      const double avg_tracks_per_call =
+          (cov_age_calls ? (static_cast<double>(cov_age_tracks_acc) / cov_age_calls) : 0.0);
+      const double avg_s_per_call = (cov_age_calls ? (cov_age_acc_s / cov_age_calls) : 0.0);
+
+      auto write_header = [](std::ostream& os) {
+        os
+          << "date,time,version,system_xml,xsd_dir,targets_xml,dim,tracks,dt_s,run_s,scan_hz,"
+             "scan_count,loop_time_s,avg_update_s,avg_query_s,avg_n_updated,"
+             "cov_age_calls,avg_tracks_per_call,cov_age_total_s,cov_age_avg_s,checksum\n";
+      };
+      auto write_row = [&](std::ostream& os) {
+        os
+          << date_str << ','
+          << time_str << ','
+          << version << ','
+          << system_xml << ','
+          << xsd_dir << ','
+          << targets_xml << ','
+          << n << ','
+          << batch << ','
+          << dt_s << ','
+          << run_s << ','
+          << scan_hz << ','
+          << scan_count << ','
+          << loop_s << ','
+          << avg_update_s << ','
+          << avg_query_s << ','
+          << avg_n_updated << ','
+          << cov_age_calls << ','
+          << avg_tracks_per_call << ','
+          << cov_age_acc_s << ','
+          << avg_s_per_call << ','
+          << checksum(tb.P)
+          << "\n";
+      };
+
+      write_header(out);
+      write_row(out);
+
+      const fs::path append_path = fs::path(output_dir) / "performance.csv";
+      std::error_code ec;
+      bool has_header = false;
+      if (fs::exists(append_path, ec) && !ec) {
+        const auto sz = fs::file_size(append_path, ec);
+        has_header = (!ec && sz > 0);
+      }
+      std::ofstream append_out(append_path, std::ios::app);
+      if (append_out) {
+        if (!has_header) {
+          write_header(append_out);
+        }
+        write_row(append_out);
+      } else if (verbose) {
+        std::cerr << "WARNING: failed to open performance CSV at '" << append_path.string() << "'.\n";
+      }
+    } else if (verbose) {
+      std::cerr << "WARNING: failed to open performance CSV at '" << csv_path << "'.\n";
+    }
+  } else if (verbose) {
+    std::cerr << "WARNING: failed to create output directory '" << output_dir << "'.\n";
   }
 
   return 0;

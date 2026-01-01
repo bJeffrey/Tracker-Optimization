@@ -11,7 +11,7 @@
 #include <vector>
 #include <cmath>
 
-#include "trk/track_kinematics_batch.hpp"
+#include "plugins/track_mgmt/track_kinematics_batch.hpp"
 
 namespace trk {
 

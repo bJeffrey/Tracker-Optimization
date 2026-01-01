@@ -17,7 +17,7 @@
 #include <cassert>
 #include <cmath>
 
-#include "trk/track_kinematics_batch.hpp"
+#include "plugins/track_mgmt/track_kinematics_batch.hpp"
 #include "model_buckets.hpp"
 #include "motion_models.hpp"
 

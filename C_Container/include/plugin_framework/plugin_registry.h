@@ -4,7 +4,7 @@
 #include <string>
 #include "plugin_interfaces.h"
 
-namespace tracker {
+namespace trk {
 
 class PluginRegistry {
 public:
@@ -35,4 +35,4 @@ private:
     std::unordered_map<std::string, std::unique_ptr<IPlugin>> plugins_;
 };
 
-} // namespace tracker
+} // namespace trk

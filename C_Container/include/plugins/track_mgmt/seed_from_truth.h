@@ -1,6 +1,6 @@
 #pragma once
-#include "trk/target_truth.h"
-#include "track_batch.h"   // tracker-owned TrackBatch (after your move/namespace)
+#include "plugins/simulation/target_truth.h"
+#include "plugins/track_mgmt/track_batch.h"   // tracker-owned TrackBatch (after your move/namespace)
 
 namespace trk {
 

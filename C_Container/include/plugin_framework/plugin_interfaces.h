@@ -2,7 +2,7 @@
 #include <string>
 #include <memory>
 
-namespace tracker {
+namespace trk {
 
 // Base interface all plugins inherit from
 class IPlugin {
@@ -14,4 +14,4 @@ public:
     virtual void shutdown() = 0;
 };
 
-} // namespace tracker
+} // namespace trk

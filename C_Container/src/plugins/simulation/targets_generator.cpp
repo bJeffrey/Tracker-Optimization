@@ -1,4 +1,4 @@
-#include "sim/targets_generator.h"
+#include "plugins/simulation/targets_generator.h"
 
 #include "xml_utils.h"
 
