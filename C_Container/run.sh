@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# run.sh - convenience wrapper for demo execution
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${ROOT_DIR}/build"
+DEMO_BIN="${BUILD_DIR}/demo"
+
+if [[ ! -x "$DEMO_BIN" ]]; then
+  echo "ERROR: demo binary not found at ${DEMO_BIN}"
+  echo "Build first with: ${ROOT_DIR}/build.sh"
+  exit 1
+fi
+
+exec "$DEMO_BIN" \
+  --config "${ROOT_DIR}/config/system.xml" \
+  --xsd-dir "${ROOT_DIR}/schemas" \
+  --verbose

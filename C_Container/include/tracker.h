@@ -1,6 +1,8 @@
 #pragma once
 // All-in-one tracker include (cfg/trk/sen/assoc + core plugins).
 
+#include "tracker_types.h"
+#include "tracker_version.h"
 #include "tracker_assoc.h"
 #include "tracker_cfg.h"
 #include "tracker_idx.h"

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(TrackerOptimization CXX)
+project(TrackerOptimization VERSION 1.0.0 LANGUAGES CXX)
 
 # ------------------------------
 # C++ standard and defaults
@@ -43,8 +43,16 @@ set(TRACKER_PUBLIC_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+set(TRACKER_VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/tracker_version.h")
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/tracker_version.h.in
+  ${TRACKER_VERSION_HEADER}
+  @ONLY
+)
+
 # Legacy flat includes (for backward compatibility during transition)
 list(APPEND TRACKER_PUBLIC_INCLUDE_DIRS
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
   ${CMAKE_CURRENT_SOURCE_DIR}/include/config
   ${CMAKE_CURRENT_SOURCE_DIR}/include/motion
   ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin_framework

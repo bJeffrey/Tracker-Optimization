@@ -39,6 +39,9 @@
 
 namespace fs = std::filesystem;
 
+/**
+ * @brief Check if a filesystem path exists (no exceptions).
+ */
 static bool file_exists(const std::string& p) {
   std::error_code ec;
   return !p.empty() && fs::exists(fs::path(p), ec);
@@ -49,6 +52,9 @@ namespace {
 // ------------------------------
 // CLI parsing
 // ------------------------------
+/**
+ * @brief Parsed command-line arguments and overrides.
+ */
 struct CliArgs {
   std::string system_xml;
   std::string xsd_dir;
@@ -69,6 +75,9 @@ struct CliArgs {
 // ------------------------------
 // Runtime state + stats
 // ------------------------------
+/**
+ * @brief Runtime accumulators for scan loop and covariance aging stats.
+ */
 struct RunStats {
   double cov_age_acc_s = 0.0;
   std::size_t cov_age_calls = 0;
@@ -82,6 +91,9 @@ struct RunStats {
   std::size_t k_acc = 0;
 };
 
+/**
+ * @brief Scan-loop components and configuration resolved from config/CLI.
+ */
 struct ScanContext {
   const cfg::SensorCfg* sensor = nullptr;
   idx::EcefAabb scan_aabb{};
@@ -99,6 +111,9 @@ struct ScanContext {
   double t_max_s = 0.0;
 };
 
+/**
+ * @brief Aggregated runtime state shared across pipeline stages.
+ */
 struct PipelineState {
   const cfg::ConfigBundle* cfg = nullptr;
   CliArgs cli{};
@@ -112,6 +127,9 @@ struct PipelineState {
   ScanContext scan;
 };
 
+/**
+ * @brief Return the value that follows a CLI flag.
+ */
 std::string arg_value(int argc, char** argv, const std::string& key, const std::string& def) {
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == key && i + 1 < argc) {
@@ -121,6 +139,9 @@ std::string arg_value(int argc, char** argv, const std::string& key, const std::
   return def;
 }
 
+/**
+ * @brief Check if a CLI flag is present.
+ */
 bool has_flag(int argc, char** argv, const std::string& key) {
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == key) return true;
@@ -128,43 +149,58 @@ bool has_flag(int argc, char** argv, const std::string& key) {
   return false;
 }
 
+/**
+ * @brief Parse a size_t CLI argument with default.
+ */
 std::size_t arg_size_t(int argc, char** argv, const std::string& key, std::size_t def) {
   const std::string s = arg_value(argc, argv, key, "");
   if (s.empty()) return def;
   return static_cast<std::size_t>(std::stoull(s));
 }
 
+/**
+ * @brief Parse a double CLI argument with default.
+ */
 double arg_double(int argc, char** argv, const std::string& key, double def) {
   const std::string s = arg_value(argc, argv, key, "");
   if (s.empty()) return def;
   return std::stod(s);
 }
 
+/**
+ * @brief Parse CLI arguments into a structured bundle.
+ */
 CliArgs parse_cli(int argc, char** argv) {
   CliArgs cli;
-  cli.system_xml = arg_value(argc, argv, "--config",  "./config/system.xml");
-  cli.xsd_dir = arg_value(argc, argv, "--xsd-dir", "./schemas");
-  cli.targets_xml_cli = arg_value(argc, argv, "--targets-xml", "");
-  cli.gen_only = has_flag(argc, argv, "--gen-only");
-  cli.no_gen = has_flag(argc, argv, "--no-gen");
-  cli.run_s = arg_double(argc, argv, "--run-s", 3.0);
-  cli.scan_hz = arg_double(argc, argv, "--scan-hz", 2.0);
+  cli.system_xml        = arg_value(argc, argv, "--config",  "./config/system.xml");
+  cli.xsd_dir           = arg_value(argc, argv, "--xsd-dir", "./schemas");
+  cli.targets_xml_cli   = arg_value(argc, argv, "--targets-xml", "");
+  cli.gen_only          = has_flag(argc, argv, "--gen-only");
+  cli.no_gen            = has_flag(argc, argv, "--no-gen");
+  cli.run_s             = arg_double(argc, argv, "--run-s", 3.0);
+  cli.scan_hz           = arg_double(argc, argv, "--scan-hz", 2.0);
   cli.index_backend_cli = arg_value(argc, argv, "--index-backend", "");
-  cli.cell_m_cli = arg_double(argc, argv, "--cell-m", 0.0);
-  cli.d_th_m_cli = arg_double(argc, argv, "--dth-m", 0.0);
-  cli.t_max_s_cli = arg_double(argc, argv, "--tmax-s", 0.0);
-  cli.output_dir = arg_value(argc, argv, "--output-dir", "./output");
-  cli.verbose = has_flag(argc, argv, "--verbose");
-  cli.tracks_cli = arg_size_t(argc, argv, "--tracks", 0);
+  cli.cell_m_cli        = arg_double(argc, argv, "--cell-m", 0.0);
+  cli.d_th_m_cli        = arg_double(argc, argv, "--dth-m", 0.0);
+  cli.t_max_s_cli       = arg_double(argc, argv, "--tmax-s", 0.0);
+  cli.output_dir        = arg_value(argc, argv, "--output-dir", "./output");
+  cli.verbose           = has_flag(argc, argv, "--verbose");
+  cli.tracks_cli        = arg_size_t(argc, argv, "--tracks", 0);
   return cli;
 }
 
+/**
+ * @brief Simple checksum of a vector (order-dependent).
+ */
 double checksum(const std::vector<double>& v) {
   long double acc = 0.0L;
   for (double x : v) acc += static_cast<long double>(x);
   return static_cast<double>(acc);
 }
 
+/**
+ * @brief Ensure an output directory exists (creates if needed).
+ */
 bool ensure_output_dir(const std::string& dir) {
   if (dir.empty()) return false;
   std::error_code ec;
@@ -172,6 +208,9 @@ bool ensure_output_dir(const std::string& dir) {
   return !ec;
 }
 
+/**
+ * @brief Get local time as std::tm.
+ */
 std::tm local_tm_now() {
   const std::time_t t = std::time(nullptr);
   std::tm tm{};
@@ -183,32 +222,21 @@ std::tm local_tm_now() {
   return tm;
 }
 
+/**
+ * @brief Format a std::tm with a strftime-compatible format string.
+ */
 std::string format_tm(const std::tm& tm, const char* fmt) {
   std::ostringstream oss;
   oss << std::put_time(&tm, fmt);
   return oss.str();
 }
 
-std::string read_xml_version_attr(const std::string& path) {
-  std::ifstream in(path);
-  if (!in) return "";
-  std::string line;
-  while (std::getline(in, line)) {
-    const std::string key = "version=";
-    const std::size_t pos = line.find(key);
-    if (pos == std::string::npos) continue;
-    const std::size_t q1 = line.find('"', pos + key.size());
-    if (q1 == std::string::npos) continue;
-    const std::size_t q2 = line.find('"', q1 + 1);
-    if (q2 == std::string::npos) continue;
-    return line.substr(q1 + 1, q2 - q1 - 1);
-  }
-  return "";
-}
-
 // ------------------------------
 // Config + init helpers
 // ------------------------------
+/**
+ * @brief Resolve targets XML using CLI override, config path, and fallback.
+ */
 std::string resolve_targets_xml(const std::string& cli_value,
                                 const cfg::ResolvedPaths& paths,
                                 bool verbose) {
@@ -230,11 +258,17 @@ std::string resolve_targets_xml(const std::string& cli_value,
   return targets_xml;
 }
 
+/**
+ * @brief Compute effective batch size from CLI/config.
+ */
 std::size_t compute_batch_size(const CliArgs& cli, const cfg::ConfigBundle& cfg) {
   if (cli.tracks_cli > 0) return cli.tracks_cli;
   return static_cast<std::size_t>(std::max(0, cfg.runtime.max_tracks_active));
 }
 
+/**
+ * @brief Build a simple diagonal process noise matrix (row-major).
+ */
 std::vector<double> build_process_noise_q(const cfg::ConfigBundle& cfg, int n) {
   const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
   std::vector<double> Q(nn, 0.0);
@@ -254,6 +288,9 @@ std::vector<double> build_process_noise_q(const cfg::ConfigBundle& cfg, int n) {
   return Q;
 }
 
+/**
+ * @brief Seed tracks from truth (or a fallback init if generation is disabled).
+ */
 void seed_tracks(PipelineState& state) {
   if (!state.cli.no_gen) {
     sim::TargetTruth truth;
@@ -290,7 +327,9 @@ void seed_tracks(PipelineState& state) {
   }
 }
 
-// Deterministic "cheap RNG" inlined (no <random>) for initializing demo velocities/omegas.
+/**
+ * @brief Deterministic "cheap RNG" for initializing demo velocities/omegas.
+ */
 inline double hash01(std::uint32_t x) {
   x ^= x << 13;
   x ^= x >> 17;
@@ -298,8 +337,9 @@ inline double hash01(std::uint32_t x) {
   return (static_cast<double>(x) / static_cast<double>(0xFFFFFFFFu));
 }
 
-// Build kinematics batch from TrackBatch.
-// (Positions come from TrackBatch hot columns; v/a are deterministically assigned for demo motion loop.)
+/**
+ * @brief Build kinematics batch from TrackBatch positions (with demo velocities/omegas).
+ */
 inline void build_kinematics_from_track_batch(const trk::TrackBatch& tb_in,
                                               trk::TrackKinematicsBatch& tb_out)
 {
@@ -315,18 +355,21 @@ inline void build_kinematics_from_track_batch(const trk::TrackBatch& tb_in,
     const double u0 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 1u));
     const double u1 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 2u));
     const double u2 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 3u));
-    tb_out.vx(i) = (u0 - 0.5) * 400.0;
-    tb_out.vy(i) = (u1 - 0.5) * 400.0;
-    tb_out.vz(i) = (u2 - 0.5) * 20.0;
+    tb_out.vx(i)    = (u0 - 0.5) * 400.0;
+    tb_out.vy(i)    = (u1 - 0.5) * 400.0;
+    tb_out.vz(i)    = (u2 - 0.5) * 20.0;
 
-    // accelerations default to 0
-    tb_out.ax(i) = 0.0;
-    tb_out.ay(i) = 0.0;
-    tb_out.az(i) = 0.0;
+    // deterministic pseudo-accelerations (m/s^2)
+    const double u4 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 5u));
+    const double u5 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 6u));
+    const double u6 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 7u));
+    tb_out.ax(i) = (u4 - 0.5) * 2.0;
+    tb_out.ay(i) = (u5 - 0.5) * 2.0;
+    tb_out.az(i) = (u6 - 0.5) * 0.2;
 
     // ~30% CT, rest CA (omega_z in rad/s)
-    const double u3 = hash01(static_cast<std::uint32_t>(i * 2654435761u + 4u));
-    tb_out.ct_omega_z_radps[i] = (u3 < 0.3) ? ((u3 - 0.15) * 0.08) : 0.0;
+    const double u3             = hash01(static_cast<std::uint32_t>(i * 2654435761u + 4u));
+    tb_out.ct_omega_z_radps[i]  = (u3 < 0.3) ? ((u3 - 0.15) * 0.08) : 0.0;
 
     // Start all as CA; selector will move-to-CT based on omega.
     tb_out.model_id[i] = trk::MotionModelId::CA9;
@@ -336,24 +379,45 @@ inline void build_kinematics_from_track_batch(const trk::TrackBatch& tb_in,
 // ------------------------------
 // Pipeline stage stubs
 // ------------------------------
-void stage_measurement_generation(PipelineState&, const std::vector<std::size_t>&, double) {}
-void stage_coarse_gating(PipelineState&, const std::vector<std::size_t>&, double) {}
-void stage_fine_gating(PipelineState&, const std::vector<std::size_t>&, double) {}
-void stage_association(PipelineState&, const std::vector<std::size_t>&, double) {}
-void stage_filter_update(PipelineState&, const std::vector<std::size_t>&, double) {}
+/**
+ * @brief Placeholder for measurement generation stage.
+ */
+void stage_measurement_generation(PipelineState&, const trk::IdList&, double) {}
+/**
+ * @brief Placeholder for coarse gating stage.
+ */
+void stage_coarse_gating(PipelineState&, const trk::IdList&, double) {}
+/**
+ * @brief Placeholder for fine gating stage.
+ */
+void stage_fine_gating(PipelineState&, const trk::IdList&, double) {}
+/**
+ * @brief Placeholder for association stage.
+ */
+void stage_association(PipelineState&, const trk::IdList&, double) {}
+/**
+ * @brief Placeholder for filter update stage.
+ */
+void stage_filter_update(PipelineState&, const trk::IdList&, double) {}
+/**
+ * @brief Placeholder for track maintenance stage.
+ */
 void stage_track_maintenance(PipelineState&, double) {}
 
 // ------------------------------
 // Scan loop setup + tick
 // ------------------------------
+/**
+ * @brief Initialize scan context and spatial index backend for the run.
+ */
 bool setup_scan_context(PipelineState& state) {
   if (state.cli.gen_only || !state.cfg->has_sensors || state.cfg->sensors.sensors.empty()) {
     return false;
   }
 
-  const cfg::SensorCfg& sensor = state.cfg->sensors.sensors.front();
-  state.scan.sensor = &sensor;
-  state.scan.scan_aabb = idx::ComputeScanAabbEcefApprox(sensor, state.cfg->ownship);
+  const cfg::SensorCfg& sensor  = state.cfg->sensors.sensors.front();
+  state.scan.sensor             = &sensor;
+  state.scan.scan_aabb          = idx::ComputeScanAabbEcefApprox(sensor, state.cfg->ownship);
 
   // Build kinematics batch from TrackBatch positions.
   build_kinematics_from_track_batch(state.tb, state.scan.tbm);
@@ -361,9 +425,9 @@ bool setup_scan_context(PipelineState& state) {
   // Persistent buckets + models.
   state.scan.buckets.init_from_track_batch(state.scan.tbm);
 
-  state.scan.mcfg.T_run_s = state.cli.run_s;
-  state.scan.mcfg.dt_s = state.dt_s;
-  state.scan.mcfg.scan_rate_hz = (state.cli.scan_hz > 0.0) ? state.cli.scan_hz : 1.0;
+  state.scan.mcfg.T_run_s       = state.cli.run_s;
+  state.scan.mcfg.dt_s          = state.dt_s;
+  state.scan.mcfg.scan_rate_hz  = (state.cli.scan_hz > 0.0) ? state.cli.scan_hz : 1.0;
 
   // ---- Create spatial index backend (XML default, CLI override)
   const std::string backend_xml = sensor.scan.index.backend;
@@ -432,6 +496,9 @@ bool setup_scan_context(PipelineState& state) {
   return true;
 }
 
+/**
+ * @brief Execute a single scan tick: update index, pipeline stages, and covariance aging.
+ */
 void process_scan_tick(PipelineState& state,
                        trk::TrackKinematicsBatch& tb_ref,
                        double t_s) {
@@ -440,6 +507,7 @@ void process_scan_tick(PipelineState& state,
   const auto t0 = std::chrono::high_resolution_clock::now();
   state.scan.upd.Apply(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), *state.scan.index);
   const auto t1 = std::chrono::high_resolution_clock::now();
+  // Candidate track indices for this scan.
   auto ids = state.scan.index->QueryAabb(state.scan.scan_aabb);
   const auto t2 = std::chrono::high_resolution_clock::now();
 
@@ -498,6 +566,9 @@ void process_scan_tick(PipelineState& state,
   }
 }
 
+/**
+ * @brief Write a per-run CSV and append to the rolling performance.csv.
+ */
 void write_csvs(const PipelineState& state) {
   if (!ensure_output_dir(state.cli.output_dir)) {
     if (state.cli.verbose) {
@@ -506,11 +577,10 @@ void write_csvs(const PipelineState& state) {
     return;
   }
 
-  const std::tm run_tm = local_tm_now();
-  const std::string date_str = format_tm(run_tm, "%Y-%m-%d");
-  const std::string time_str = format_tm(run_tm, "%H:%M:%S");
-  const std::string version_str = read_xml_version_attr(state.cli.system_xml);
-  const std::string version = version_str.empty() ? "unknown" : version_str;
+  const std::tm run_tm          = local_tm_now();
+  const std::string date_str    = format_tm(run_tm, "%Y-%m-%d");
+  const std::string time_str    = format_tm(run_tm, "%H:%M:%S");
+  const std::string version = TRACKER_VERSION_STRING;
 
   const std::string csv_path =
     (fs::path(state.cli.output_dir) / ("performance_" + format_tm(run_tm, "%Y%m%d_%H%M%S") + ".csv")).string();
@@ -522,10 +592,10 @@ void write_csvs(const PipelineState& state) {
     return;
   }
 
-  const double avg_update_s = (state.stats.k_acc ? (state.stats.update_acc / state.stats.k_acc) : 0.0);
-  const double avg_query_s = (state.stats.k_acc ? (state.stats.query_acc / state.stats.k_acc) : 0.0);
-  const double avg_n_updated = (state.stats.k_acc ? (state.stats.nupd_acc / state.stats.k_acc) : 0.0);
-  const double avg_tracks_per_call =
+  const double avg_update_s         = (state.stats.k_acc ? (state.stats.update_acc / state.stats.k_acc) : 0.0);
+  const double avg_query_s          = (state.stats.k_acc ? (state.stats.query_acc / state.stats.k_acc) : 0.0);
+  const double avg_n_updated        = (state.stats.k_acc ? (state.stats.nupd_acc / state.stats.k_acc) : 0.0);
+  const double avg_tracks_per_call  =
       (state.stats.cov_age_calls
            ? (static_cast<double>(state.stats.cov_age_tracks_acc) / state.stats.cov_age_calls)
            : 0.0);
@@ -576,6 +646,7 @@ void write_csvs(const PipelineState& state) {
   }
   std::ofstream append_out(append_path, std::ios::app);
   if (append_out) {
+    // Write header only when the rolling file is created.
     if (!has_header) {
       write_header(append_out);
     }
@@ -587,6 +658,9 @@ void write_csvs(const PipelineState& state) {
 
 } // namespace
 
+/**
+ * @brief Demo driver entrypoint.
+ */
 int main(int argc, char** argv) try {
   const CliArgs cli = parse_cli(argc, argv);
 

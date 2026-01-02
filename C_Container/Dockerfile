@@ -23,6 +23,7 @@ FROM ubuntu:22.04 AS build
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BACKEND=eigen        # eigen | std | mkl
 ARG GENERATE_DOCS=0
+ENV TRACKER_BACKEND=${BACKEND}
 
 # BuildKit cache for ccache compilation artifacts
 ENV CCACHE_DIR=/ccache
@@ -69,6 +70,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /src
 COPY . /src
+
+# Record backend choice for tools/scripts that auto-detect
+RUN echo "${BACKEND}" > /etc/tracker_backend
 
 # Configure & build one backend using your CMake options (C++17 comes from CMakeLists.txt)
 #
@@ -126,6 +130,7 @@ FROM ubuntu:22.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BACKEND=eigen
+ENV TRACKER_BACKEND=${BACKEND}
 
 # Runtime deps:
 # - libxml2 is needed by the C++ config loader (libxml2-dev is build-only).
@@ -170,6 +175,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Defaults are harmless for non-MKL images; effective when MKL is installed.
 ENV MKL_NUM_THREADS=1
 ENV MKL_DYNAMIC=FALSE
+
+# Record backend choice for tools/scripts that auto-detect
+RUN echo "${BACKEND}" > /etc/tracker_backend
 
 
 # Copy the built binaries
