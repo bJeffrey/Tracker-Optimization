@@ -27,6 +27,12 @@ public:
              const double* xs, const double* ys, const double* zs,
              ISpatialIndex3D& index);
 
+  // Apply updates for a subset of ids (caller already decided which ids changed).
+  void ApplySubset(double t_now_s,
+                   const double* xs, const double* ys, const double* zs,
+                   const std::uint64_t* ids, std::size_t n_ids,
+                   ISpatialIndex3D& index);
+
   std::size_t NumUpdatedLastApply() const { return n_updated_last_; }
 
 private:

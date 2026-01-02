@@ -1,0 +1,2 @@
+date,time,version,system_xml,xsd_dir,targets_xml,dim,tracks,dt_s,run_s,scan_hz,scan_count,loop_time_s,avg_update_s,avg_query_s,avg_n_updated,cov_age_calls,avg_tracks_per_call,cov_age_total_s,cov_age_avg_s,checksum
+2026-01-01,19:01:30,1.0,./config/system.xml,./schemas,config/targets/targets_gen_1m_ca9.xml,9,50000,1,3,2,7,0.0868546,0.00325798,0.000386939,28571.4,7,506.857,0.000387137,5.53053e-05,3.4343e+11

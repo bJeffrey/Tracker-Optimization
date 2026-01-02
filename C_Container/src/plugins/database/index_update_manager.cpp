@@ -77,4 +77,22 @@ void IndexUpdateManager::Apply(double t_now_s,
   }
 }
 
+void IndexUpdateManager::ApplySubset(double t_now_s,
+                                     const double* xs, const double* ys, const double* zs,
+                                     const std::uint64_t* ids, std::size_t n_ids,
+                                     ISpatialIndex3D& index) {
+  if (!xs || !ys || !zs || !ids) throw std::runtime_error("IndexUpdateManager::ApplySubset: null pointers");
+  n_updated_last_ = 0;
+
+  for (std::size_t k = 0; k < n_ids; ++k) {
+    const std::size_t i = static_cast<std::size_t>(ids[k]);
+    index.UpdatePoint(static_cast<std::uint64_t>(i), xs[i], ys[i], zs[i]);
+    last_x_[i] = xs[i];
+    last_y_[i] = ys[i];
+    last_z_[i] = zs[i];
+    last_t_[i] = t_now_s;
+    ++n_updated_last_;
+  }
+}
+
 } // namespace idx

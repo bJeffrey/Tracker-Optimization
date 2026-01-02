@@ -90,6 +90,8 @@ struct RunStats {
   double query_acc = 0.0;
   double nupd_acc = 0.0;
   std::size_t k_acc = 0;
+  double finalize_acc_s = 0.0;
+  std::size_t finalize_calls = 0;
 };
 
 /**
@@ -190,7 +192,7 @@ CliArgs parse_cli(int argc, char** argv) {
   cli.cell_m_cli        = arg_double(argc, argv, "--cell-m", 0.0);
   cli.d_th_m_cli        = arg_double(argc, argv, "--dth-m", 0.0);
   cli.t_max_s_cli       = arg_double(argc, argv, "--tmax-s", 0.0);
-  cli.output_dir        = arg_value(argc, argv, "--output-dir", "./output");
+  cli.output_dir        = arg_value(argc, argv, "--output-dir", "./logs");
   cli.verbose           = has_flag(argc, argv, "--verbose");
   cli.tracks_cli        = arg_size_t(argc, argv, "--tracks", 0);
   return cli;
@@ -477,6 +479,20 @@ bool setup_scan_context(PipelineState& state) {
   state.scan.track_db = db::CreateTrackDatabase(db_cfg);
   state.scan.track_db->Reserve(state.scan.tbm.n);
   state.scan.track_db->Configure(state.scan.d_th_m, state.scan.t_max_s);
+  if (store.mode == "HOT_PLUS_WARM") {
+    // Initialize warm store before the scan loop so first-scan latency is not impacted.
+    const auto init_t0 = std::chrono::high_resolution_clock::now();
+    state.scan.track_db->FinalizeScan(
+      0.0,
+      state.scan.tbm.x_ptr(),
+      state.scan.tbm.y_ptr(),
+      state.scan.tbm.z_ptr(),
+      state.scan.tbm.n,
+      nullptr);
+    const auto init_t1 = std::chrono::high_resolution_clock::now();
+    const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
+    std::cout << "  warm_init_s=" << init_s << "\n";
+  }
 
   std::cout << "Scan-driven coarse query (loop):\n";
   std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
@@ -535,7 +551,13 @@ void process_scan_tick(PipelineState& state,
   const auto t3 = std::chrono::high_resolution_clock::now();
 
   // Persist post-scan updates to warm store (if configured).
-  state.scan.track_db->FinalizeScan(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
+  // Heuristic: persist warm updates only for current scan candidates.
+  bool did_finalize = false;
+  if (!ids.empty()) {
+    state.scan.track_db->FinalizeScan(
+      t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n, &ids);
+    did_finalize = true;
+  }
   const auto t4 = std::chrono::high_resolution_clock::now();
 
   // --- Scan-driven covariance aging (lazy): age only candidates to scan time t_s ---
@@ -566,11 +588,16 @@ void process_scan_tick(PipelineState& state,
   }
   const auto t5 = std::chrono::high_resolution_clock::now();
 
+  if (did_finalize) {
+    state.stats.finalize_acc_s += std::chrono::duration<double>(t4 - t3).count();
+    ++state.stats.finalize_calls;
+  }
+
   if (state.debug_timing) {
     const double update_s = std::chrono::duration<double>(t1 - t0).count();
     const double query_s = std::chrono::duration<double>(t2 - t1).count();
     const double stages_s = std::chrono::duration<double>(t3 - t2).count();
-    const double finalize_s = std::chrono::duration<double>(t4 - t3).count();
+    const double finalize_s = did_finalize ? std::chrono::duration<double>(t4 - t3).count() : 0.0;
     const double cov_s = std::chrono::duration<double>(t5 - t4).count();
     std::cout << "  timing_s"
               << " update=" << update_s
@@ -612,8 +639,17 @@ void write_csvs(const PipelineState& state) {
   const std::string time_str    = format_tm(run_tm, "%H:%M:%S");
   const std::string version = TRACKER_VERSION_STRING;
 
+  const std::string date_folder = format_tm(run_tm, "%Y%m%d");
+  const fs::path archive_dir = fs::path(state.cli.output_dir) / "archive" / date_folder;
+  if (!ensure_output_dir(archive_dir.string())) {
+    if (state.cli.verbose) {
+      std::cerr << "WARNING: failed to create archive directory '" << archive_dir.string() << "'.\n";
+    }
+    return;
+  }
+
   const std::string csv_path =
-    (fs::path(state.cli.output_dir) / ("performance_" + format_tm(run_tm, "%Y%m%d_%H%M%S") + ".csv")).string();
+    (archive_dir / ("performance_" + format_tm(run_tm, "%Y%m%d_%H%M%S") + ".csv")).string();
   std::ofstream out(csv_path, std::ios::trunc);
   if (!out) {
     if (state.cli.verbose) {
@@ -631,11 +667,13 @@ void write_csvs(const PipelineState& state) {
            : 0.0);
   const double avg_s_per_call =
       (state.stats.cov_age_calls ? (state.stats.cov_age_acc_s / state.stats.cov_age_calls) : 0.0);
+  const double avg_finalize_s =
+      (state.stats.finalize_calls ? (state.stats.finalize_acc_s / state.stats.finalize_calls) : 0.0);
 
   auto write_header = [](std::ostream& os) {
     os
       << "date,time,version,system_xml,xsd_dir,targets_xml,dim,tracks,dt_s,run_s,scan_hz,"
-         "scan_count,loop_time_s,avg_update_s,avg_query_s,avg_n_updated,"
+         "scan_count,loop_time_s,avg_update_s,avg_query_s,avg_n_updated,finalize_total_s,finalize_avg_s,"
          "cov_age_calls,avg_tracks_per_call,cov_age_total_s,cov_age_avg_s,checksum\n";
   };
   auto write_row = [&](std::ostream& os) {
@@ -656,6 +694,8 @@ void write_csvs(const PipelineState& state) {
       << avg_update_s << ','
       << avg_query_s << ','
       << avg_n_updated << ','
+      << state.stats.finalize_acc_s << ','
+      << avg_finalize_s << ','
       << state.stats.cov_age_calls << ','
       << avg_tracks_per_call << ','
       << state.stats.cov_age_acc_s << ','

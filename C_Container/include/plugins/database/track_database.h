@@ -39,7 +39,8 @@ public:
                             const double* xs,
                             const double* ys,
                             const double* zs,
-                            std::size_t n_tracks) = 0;
+                            std::size_t n_tracks,
+                            const trk::IdList* ids) = 0;
 
   // Query AABB overlap candidates.
   virtual trk::IdList QueryAabb(const idx::EcefAabb& aabb) const = 0;

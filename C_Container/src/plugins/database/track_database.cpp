@@ -52,7 +52,8 @@ public:
                     const double* /*xs*/,
                     const double* /*ys*/,
                     const double* /*zs*/,
-                    std::size_t /*n_tracks*/) override {}
+                    std::size_t /*n_tracks*/,
+                    const trk::IdList* /*ids*/) override {}
 
   trk::IdList QueryAabb(const idx::EcefAabb& aabb) const override {
     if (!index_) return {};
@@ -111,19 +112,29 @@ public:
                     const double* xs,
                     const double* ys,
                     const double* zs,
-                    std::size_t n_tracks) override {
+                    std::size_t n_tracks,
+                    const trk::IdList* ids) override {
+    (void)n_tracks;
     // TODO: warm-store prefetch/merge goes here.
     if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_.get())) {
       sqlite->Begin();
       try {
-        warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
+        if (ids && !ids->empty()) {
+          warm_updater_.ApplySubset(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
+        } else {
+          warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
+        }
         sqlite->Commit();
       } catch (...) {
         sqlite->Rollback();
         throw;
       }
     } else {
-      warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
+      if (ids && !ids->empty()) {
+        warm_updater_.ApplySubset(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
+      } else {
+        warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
+      }
     }
   }
 
