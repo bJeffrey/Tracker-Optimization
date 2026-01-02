@@ -1,0 +1,45 @@
+#pragma once
+
+#include "plugins/database/spatial_index_3d.h"
+#include "tracker_types.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+
+namespace db {
+
+struct TrackDatabaseConfig {
+  std::string mode;    // HOT_ONLY / HOT_PLUS_WARM
+  std::string backend; // "sqlite_rtree" or "uniform_grid"
+  double grid_cell_m = 2000.0;
+  std::uint64_t dense_cell_probe_limit = 200000;
+  double d_th_m = 500.0;
+  double t_max_s = 1.0;
+};
+
+class ITrackDatabase {
+public:
+  virtual ~ITrackDatabase() = default;
+
+  virtual void Reserve(std::size_t n_tracks) = 0;
+  virtual void Configure(double d_th_m, double t_max_s) = 0;
+
+  // Update index entries using current positions at time t_now_s.
+  virtual void UpdateTracks(double t_now_s,
+                            const double* xs,
+                            const double* ys,
+                            const double* zs,
+                            std::size_t n_tracks) = 0;
+
+  // Query AABB overlap candidates.
+  virtual trk::IdList QueryAabb(const idx::EcefAabb& aabb) const = 0;
+
+  virtual std::size_t NumUpdatedLastUpdate() const = 0;
+  virtual bool SupportsIncrementalUpdates() const = 0;
+};
+
+std::unique_ptr<ITrackDatabase> CreateTrackDatabase(const TrackDatabaseConfig& cfg);
+
+} // namespace db

@@ -7,4 +7,5 @@
 #include "plugins/database/spatial_index_3d.h"
 #include "plugins/database/spatial_index_factory.h"
 #include "plugins/database/sqlite_rtree_backend.h"
+#include "plugins/database/track_database.h"
 #include "plugins/database/uniform_grid_index.h"

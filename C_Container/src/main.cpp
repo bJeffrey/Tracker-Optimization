@@ -98,8 +98,7 @@ struct ScanContext {
   const cfg::SensorCfg* sensor = nullptr;
   idx::EcefAabb scan_aabb{};
   idx::SpatialIndexConfig icfg{};
-  std::unique_ptr<idx::ISpatialIndex3D> index;
-  idx::IndexUpdateManager upd;
+  std::unique_ptr<db::ITrackDatabase> track_db;
   trk::TrackKinematicsBatch tbm;
   trk::ModelBuckets buckets;
   trk::MotionModel_CA9 model_ca;
@@ -458,18 +457,17 @@ bool setup_scan_context(PipelineState& state) {
     (state.cli.t_max_s_cli > 0.0) ? state.cli.t_max_s_cli :
     (store.index.t_max_s > 0.0 ? store.index.t_max_s : (2.0 / state.scan.mcfg.scan_rate_hz));
 
-  state.scan.index = idx::CreateSpatialIndex(state.scan.icfg);
-  state.scan.index->Reserve(state.scan.tbm.n);
+  db::TrackDatabaseConfig db_cfg;
+  db_cfg.mode = store.mode;
+  db_cfg.backend = state.scan.icfg.backend;
+  db_cfg.grid_cell_m = state.scan.icfg.grid_cell_m;
+  db_cfg.dense_cell_probe_limit = store.index.dense_cell_probe_limit;
+  db_cfg.d_th_m = state.scan.d_th_m;
+  db_cfg.t_max_s = state.scan.t_max_s;
 
-  // Apply probe limit if backend supports it (UniformGridIndex)
-  if (state.scan.icfg.backend == "uniform_grid") {
-    if (auto* grid = dynamic_cast<idx::UniformGridIndex*>(state.scan.index.get())) {
-      grid->SetDenseCellProbeLimit(store.index.dense_cell_probe_limit);
-    }
-  }
-
-  state.scan.upd.Reset(state.scan.tbm.n);
-  state.scan.upd.Configure(state.scan.d_th_m, state.scan.t_max_s);
+  state.scan.track_db = db::CreateTrackDatabase(db_cfg);
+  state.scan.track_db->Reserve(state.scan.tbm.n);
+  state.scan.track_db->Configure(state.scan.d_th_m, state.scan.t_max_s);
 
   std::cout << "Scan-driven coarse query (loop):\n";
   std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
@@ -482,7 +480,7 @@ bool setup_scan_context(PipelineState& state) {
             << " scan_hz=" << state.scan.mcfg.scan_rate_hz << "\n";
   std::cout << "  index.backend=" << state.scan.icfg.backend
             << " supports_incremental="
-            << (state.scan.index->SupportsIncrementalUpdates() ? "yes" : "no") << "\n";
+            << (state.scan.track_db->SupportsIncrementalUpdates() ? "yes" : "no") << "\n";
   if (state.scan.icfg.backend == "uniform_grid") {
     std::cout << "  grid.cell_m=" << state.scan.icfg.grid_cell_m
               << " d_th_m=" << state.scan.d_th_m
@@ -507,15 +505,15 @@ void process_scan_tick(PipelineState& state,
   ++state.stats.scan_count;
 
   const auto t0 = std::chrono::high_resolution_clock::now();
-  state.scan.upd.Apply(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), *state.scan.index);
+  state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
   const auto t1 = std::chrono::high_resolution_clock::now();
   // Candidate track indices for this scan.
-  auto ids = state.scan.index->QueryAabb(state.scan.scan_aabb);
+  auto ids = state.scan.track_db->QueryAabb(state.scan.scan_aabb);
   const auto t2 = std::chrono::high_resolution_clock::now();
 
   state.stats.update_acc += std::chrono::duration<double>(t1 - t0).count();
   state.stats.query_acc  += std::chrono::duration<double>(t2 - t1).count();
-  state.stats.nupd_acc   += static_cast<double>(state.scan.upd.NumUpdatedLastApply());
+  state.stats.nupd_acc   += static_cast<double>(state.scan.track_db->NumUpdatedLastUpdate());
   ++state.stats.k_acc;
 
   // Placeholder pipeline stages (measurement -> gating -> association -> filter -> maintenance)
@@ -563,7 +561,7 @@ void process_scan_tick(PipelineState& state,
   if (state.cli.verbose && (state.stats.scan_count <= 3 || (state.stats.scan_count % 10 == 0))) {
     std::cout << "  scan=" << state.stats.scan_count
               << " t_s=" << t_s
-              << " n_updated=" << state.scan.upd.NumUpdatedLastApply()
+              << " n_updated=" << state.scan.track_db->NumUpdatedLastUpdate()
               << " candidates=" << ids.size() << " / " << tb_ref.n << "\n";
   }
 }

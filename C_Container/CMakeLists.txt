@@ -208,6 +208,7 @@ if (ENABLE_PLUGIN_DATABASE)
     src/plugins/database/index_update_manager.cpp
     src/plugins/database/sqlite_rtree_backend.cpp
     src/plugins/database/spatial_index_factory.cpp
+    src/plugins/database/track_database.cpp
   )
   target_include_directories(plugin_database PUBLIC ${TRACKER_PUBLIC_INCLUDE_DIRS})
   target_link_libraries(plugin_database PUBLIC plugin_framework)
