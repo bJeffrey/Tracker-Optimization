@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
 DEMO_BIN="${BUILD_DIR}/demo"
+export TRACKER_LOG_LEVEL="${TRACKER_LOG_LEVEL:-debug}"
 
 if [[ ! -x "$DEMO_BIN" ]]; then
   echo "ERROR: demo binary not found at ${DEMO_BIN}"

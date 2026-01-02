@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace idx {
@@ -18,6 +19,7 @@ struct EcefAabb {
 class SqliteRTreeIndex {
 public:
   SqliteRTreeIndex();
+  explicit SqliteRTreeIndex(const std::string& db_uri);
   ~SqliteRTreeIndex();
 
   SqliteRTreeIndex(const SqliteRTreeIndex&) = delete;
@@ -34,6 +36,7 @@ public:
 
   // Insert a point as a zero-volume box.
   void InsertPoint(std::uint64_t id, double x, double y, double z);
+  void UpdatePoint(std::uint64_t id, double x, double y, double z);
 
   // New: fast bulk insert (no ClearAll inside; caller chooses)
   void BulkInsertPointsXYZ(const double* xs, const double* ys, const double* zs, std::size_t n,

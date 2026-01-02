@@ -1,54 +1,52 @@
-Refined Next Steps Plan (Event-Driven Tracker + AER Measurements)
+Data residency model
+- Warm store (disk, SQLite R*Tree + track table): authoritative state, covariance, metadata for all tracks.
+- Hot store (RAM): only tracks in/near current scan volume (plus look-ahead buffer). Holds full state + covariance + metadata for the active working set.
+- Hot index (RAM): spatial index for hot tracks only (fast query for gating/association).
+- Warm index (disk): spatial index for all tracks (authoritative, used to populate hot).
 
-Step 0 — Naming + ownership split (clarity)
-1) Rename current sim-side SoA to a truth namespace/type:
-   - truth::TruthBatchSoA (authoritative truth kinematics)
-2) Establish tracker-side containers:
-   - trk::TrackBatchSoA (estimated state, SoA slab)
-   - trk::TrackMeta (track_id, status, quality, timestamps)
-   - trk::TrackCovBatch (P storage) — can remain interleaved batch at first
+Stage 0: Startup / Pre-run
+- Warm: full dataset, persistent.
+- Hot: empty (or restored from last snapshot if configured).
+- Action: no batch compute yet.
 
-Step 1 — Time bookkeeping (event-driven foundation)
-3) Add per-track prediction time:
-   - t_pred_s[i] meaning state+cov aged to this time (recommended single timestamp)
-4) Replace “predict every dt for tracker” with:
-   - EnsurePredictedToTime(ids, t_event, flags)
-5) Keep truth sim loop (dt-based) only for generating truth and measurements.
+Stage 1: Scan prefetch (before measurements)
+- Warm: query R*Tree for scan AABB -> candidate IDs.
+- Hot: load those IDs' state + covariance + metadata into hot.
+- Batch use: build hot TrackBatch and TrackKinematicsBatch for all active IDs in one contiguous allocation.
 
-Step 2 — Prediction (state + covariance) as reusable kernels
-6) Implement CA9 state prediction for subsets (SoA slab).
-7) Implement CA9 covariance prediction for subsets:
-   - preferred: P ← F P Fᵀ + Qd(dt)
-   - if deferring full FPFᵀ: keep RW as placeholder, but FLAG it as “not KF-correct”
-8) For CT tracks initially:
-   - predict state with CT model (already exists)
-   - predict covariance using CA9 predictor as a first approximation (baseline gating)
+Stage 2: Predict / propagate to scan time
+- Hot: update state + covariance for hot tracks only.
+- Batch use: run vectorized/batched propagation and rw_add_qdt_subset_var_dt on the hot subset (one kernel over contiguous hot arrays).
+- Warm: unchanged (authoritative but stale until finalize).
 
-Step 3 — Measurement generation in AER (truth → measurements)
-9) Add AER measurement generator:
-   - for each scan: from truth::TruthBatchSoA produce meas::ScanMeasAER
-   - include Pd, misses, clutter, noise
-10) Store measurement time t_scan and sensor id.
+Stage 3: Measurement generation (placeholder)
+- Hot: no change to track storage.
+- Warm: no change.
 
-Step 4 — Gating in the right frames
-11) Coarse gate: spatial index AABB (ECEF) → candidate tracks.
-12) For those candidates:
-   - EnsurePredictedToTime(candidate_ids, t_scan, need_state=true, need_cov=true)
-13) Fine gate: compute z_pred_aer and S in AER; Mahalanobis gate.
+Stage 4: Coarse gating (hot only)
+- Hot: run coarse gating against hot index + measurements.
+- Batch use: vectorized distance/volume checks over hot subset.
 
-Step 5 — Association plugin architecture
-14) Define assoc::AssocProblem + assoc::IAssociator.
-15) Implement assoc::GnnAssociator first.
-16) Ensure the tracker calls associator via the interface only (no direct coupling).
+Stage 5: Fine gating / association
+- Hot: compute associations for hot tracks.
+- Batch use: matrix ops over association candidates (compact arrays).
 
-Step 6 — Track update + management + publish policy
-17) EKF update in AER for assigned tracks.
-18) Unassigned logic:
-   - misses → track score down
-   - clutter/spurious → tentative tracks with low quality
-19) Confirm/tentative rules + publish filter (“don’t publish low-confidence”).
+Stage 6: Filter update
+- Hot: update state + covariance for associated tracks.
+- Batch use: Kalman/filter updates in batches for associated tracks only.
 
-Notes
-- Tracker estimate propagation is EVENT-DRIVEN (scan, offboard request, incoming remote track, etc.).
-- Truth simulation can remain dt-based for deterministic scenario generation.
-- Recommended consistency rule: state and covariance share the same “aged-to” timestamp (t_pred_s).
+Stage 7: Track maintenance / metadata
+- Hot: update metadata (age, status, quality, last_update).
+- Warm: still unchanged.
+
+Stage 8: Finalize scan (persist to warm)
+- Warm: update only tracks that changed (state + covariance + metadata).
+- Hot: remains as working set until next scan.
+- Optimization: write back only changed IDs, in a single transaction per scan. Avoid bulk re-writes.
+
+Key performance optimizations
+- Hot contains only working set: RAM scales with scan density, not total tracks.
+- Batch ops only on hot subset: leverage contiguous arrays for propagation and filter updates.
+- Warm updates only for changed tracks: eliminates large disk writes per scan.
+- Index update thresholds: hot index uses tighter thresholds; warm index uses looser thresholds to reduce disk churn.
+- Prefetch window: optionally expand AABB by a look-ahead buffer so hot has tracks needed for the next scan, reducing warm query frequency.

@@ -6,6 +6,7 @@
 #include "path_utils.h"
 
 #include <filesystem>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <unordered_map>
@@ -332,8 +333,40 @@ static StoreCfg parse_store(void* doc) {
     }
 
     // Sqlite child (optional)
-    // For minimal loader: read a few common fields using document paths under this profile is non-trivial without XPath.
-    // We'll keep defaults here; schema validation ensures any present values are well-formed.
+    auto node_name_eq = [](xmlNodePtr node, const char* name) -> bool {
+      return node && node->type == XML_ELEMENT_NODE && node->name &&
+             (std::string(reinterpret_cast<const char*>(node->name)) == name);
+    };
+    auto find_child = [&](xmlNodePtr parent, const char* child_name) -> xmlNodePtr {
+      if (!parent) return nullptr;
+      for (xmlNodePtr c = parent->children; c; c = c->next) {
+        if (node_name_eq(c, child_name)) return c;
+      }
+      return nullptr;
+    };
+    auto child_text = [&](xmlNodePtr parent, const char* child_name) -> std::string {
+      xmlNodePtr c = find_child(parent, child_name);
+      if (!c) return {};
+      xmlChar* txt = xmlNodeGetContent(c);
+      std::string s = txt ? reinterpret_cast<const char*>(txt) : "";
+      if (txt) xmlFree(txt);
+      // trim
+      auto is_ws = [](unsigned char ch) { return std::isspace(ch) != 0; };
+      while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+      while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) s.pop_back();
+      return s;
+    };
+
+    xmlNodePtr node = reinterpret_cast<xmlNodePtr>(n);
+    if (xmlNodePtr sqlite = find_child(node, "Sqlite")) {
+      const std::string db_uri = child_text(sqlite, "DbUri");
+      if (!db_uri.empty()) p.sqlite.db_uri = db_uri;
+      const std::string journal = child_text(sqlite, "JournalMode");
+      if (!journal.empty()) p.sqlite.journal_mode = journal;
+      const std::string sync = child_text(sqlite, "Synchronous");
+      if (!sync.empty()) p.sqlite.synchronous = sync;
+    }
+
     out.by_id[p.id] = p;
   }
   if (out.by_id.empty()) throw std::runtime_error("No Store/Profile entries found.");

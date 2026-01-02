@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <string>
 
 namespace idx {
 
@@ -15,12 +16,17 @@ namespace idx {
 class SqliteRTreeIndexBackend final : public ISpatialIndex3D {
 public:
   SqliteRTreeIndexBackend();
+  explicit SqliteRTreeIndexBackend(const std::string& db_uri);
 
   void Reserve(std::size_t n_tracks) override;
   void BuildFromXYZ(const double* xs, const double* ys, const double* zs, std::size_t n) override;
   void UpdatePoint(std::uint64_t id, double x, double y, double z) override;
   std::vector<std::uint64_t> QueryAabb(const EcefAabb& aabb) const override;
-  bool SupportsIncrementalUpdates() const override { return false; }
+  bool SupportsIncrementalUpdates() const override { return true; }
+
+  void Begin();
+  void Commit();
+  void Rollback();
 
 private:
   SqliteRTreeIndex rtree_;

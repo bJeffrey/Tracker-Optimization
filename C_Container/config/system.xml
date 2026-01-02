@@ -6,7 +6,10 @@
 
   <Active>
     <RuntimeProfile id="profile_50k_1hz"/>
+    <StoreProfile id="store_hot_plus_warm_sqlite_file"/>
+    <!-- Alternative store profile:
     <StoreProfile id="store_hot_only_sqlite_mem"/>
+    -->
     <Scenario id="scenario_1m_ca9"/>
   </Active>
 

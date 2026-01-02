@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cmath>
 #include <ctime>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -124,7 +125,14 @@ struct PipelineState {
   std::vector<double> Q;
   RunStats stats;
   ScanContext scan;
+  bool debug_timing = false;
 };
+
+bool is_debug_timing_enabled() {
+  const char* level = std::getenv("TRACKER_LOG_LEVEL");
+  if (!level) return false;
+  return std::string(level) == "debug";
+}
 
 /**
  * @brief Return the value that follows a CLI flag.
@@ -460,6 +468,7 @@ bool setup_scan_context(PipelineState& state) {
   db::TrackDatabaseConfig db_cfg;
   db_cfg.mode = store.mode;
   db_cfg.backend = state.scan.icfg.backend;
+  db_cfg.sqlite_db_uri = store.sqlite.db_uri;
   db_cfg.grid_cell_m = state.scan.icfg.grid_cell_m;
   db_cfg.dense_cell_probe_limit = store.index.dense_cell_probe_limit;
   db_cfg.d_th_m = state.scan.d_th_m;
@@ -523,6 +532,11 @@ void process_scan_tick(PipelineState& state,
   stage_association(state, ids, t_s);
   stage_filter_update(state, ids, t_s);
   stage_track_maintenance(state, t_s);
+  const auto t3 = std::chrono::high_resolution_clock::now();
+
+  // Persist post-scan updates to warm store (if configured).
+  state.scan.track_db->FinalizeScan(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
+  const auto t4 = std::chrono::high_resolution_clock::now();
 
   // --- Scan-driven covariance aging (lazy): age only candidates to scan time t_s ---
   // Use TrackBatch::last_cov_prop_s as t_pred_s (P-aged-to time) per-track.
@@ -549,6 +563,22 @@ void process_scan_tick(PipelineState& state,
     state.stats.cov_age_acc_s += std::chrono::duration<double>(tc1 - tc0).count();
     ++state.stats.cov_age_calls;
     state.stats.cov_age_tracks_acc += ids.size();
+  }
+  const auto t5 = std::chrono::high_resolution_clock::now();
+
+  if (state.debug_timing) {
+    const double update_s = std::chrono::duration<double>(t1 - t0).count();
+    const double query_s = std::chrono::duration<double>(t2 - t1).count();
+    const double stages_s = std::chrono::duration<double>(t3 - t2).count();
+    const double finalize_s = std::chrono::duration<double>(t4 - t3).count();
+    const double cov_s = std::chrono::duration<double>(t5 - t4).count();
+    std::cout << "  timing_s"
+              << " update=" << update_s
+              << " query=" << query_s
+              << " stages=" << stages_s
+              << " finalize=" << finalize_s
+              << " cov_age=" << cov_s
+              << "\n";
   }
 
   if (state.cli.verbose && (state.stats.k_acc % 5 == 0)) {
@@ -670,6 +700,7 @@ int main(int argc, char** argv) try {
   PipelineState state;
   state.cfg = &cfg;
   state.cli = cli;
+  state.debug_timing = is_debug_timing_enabled();
 
   // Resolve targets generator XML:
   //  1) CLI override if provided

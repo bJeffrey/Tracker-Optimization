@@ -12,6 +12,7 @@
 #include <sqlite3.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -22,6 +23,7 @@ namespace idx {
 struct SqliteRTreeIndex::Impl {
   sqlite3* db = nullptr;
   sqlite3_stmt* insert_stmt = nullptr;
+  sqlite3_stmt* update_stmt = nullptr;
   sqlite3_stmt* query_stmt = nullptr;
   sqlite3_stmt* clear_stmt = nullptr;  // kept if you still have ClearAll() in the header
   std::size_t count = 0;
@@ -79,9 +81,38 @@ SqliteRTreeIndex::SqliteRTreeIndex() : p_(new Impl()) {
   Reset();
 }
 
+SqliteRTreeIndex::SqliteRTreeIndex(const std::string& db_uri) : p_(new Impl()) {
+  const char* uri = db_uri.empty() ? ":memory:" : db_uri.c_str();
+  if (!db_uri.empty() && db_uri != ":memory:") {
+    std::error_code ec;
+    std::filesystem::path p(db_uri);
+    if (p.has_parent_path()) {
+      std::filesystem::create_directories(p.parent_path(), ec);
+    }
+  }
+
+  const int rc = sqlite3_open(uri, &p_->db);
+  if (rc != SQLITE_OK) {
+    const char* msg = p_->db ? sqlite3_errmsg(p_->db) : "unknown";
+    throw std::runtime_error(std::string("sqlite3_open failed: ") + msg);
+  }
+
+  if (db_uri.empty() || db_uri == ":memory:") {
+    exec_or_throw(p_->db, "PRAGMA temp_store=MEMORY;");
+    exec_or_throw(p_->db, "PRAGMA synchronous=OFF;");
+    exec_or_throw(p_->db, "PRAGMA journal_mode=MEMORY;");
+  } else {
+    exec_or_throw(p_->db, "PRAGMA journal_mode=WAL;");
+    exec_or_throw(p_->db, "PRAGMA synchronous=NORMAL;");
+  }
+
+  Reset();
+}
+
 SqliteRTreeIndex::~SqliteRTreeIndex() {
   if (!p_) return;
   if (p_->insert_stmt) sqlite3_finalize(p_->insert_stmt);
+  if (p_->update_stmt) sqlite3_finalize(p_->update_stmt);
   if (p_->query_stmt) sqlite3_finalize(p_->query_stmt);
   if (p_->clear_stmt) sqlite3_finalize(p_->clear_stmt);
   if (p_->db) sqlite3_close(p_->db);
@@ -100,6 +131,10 @@ void SqliteRTreeIndex::Reset() {
     sqlite3_finalize(p_->query_stmt);
     p_->query_stmt = nullptr;
   }
+  if (p_->update_stmt) {
+    sqlite3_finalize(p_->update_stmt);
+    p_->update_stmt = nullptr;
+  }
   if (p_->clear_stmt) {
     sqlite3_finalize(p_->clear_stmt);
     p_->clear_stmt = nullptr;
@@ -116,6 +151,13 @@ void SqliteRTreeIndex::Reset() {
   const char* insert_sql = "INSERT INTO rtree_tracks VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);";
   if (sqlite3_prepare_v2(p_->db, insert_sql, -1, &p_->insert_stmt, nullptr) != SQLITE_OK) {
     throw std::runtime_error("sqlite3_prepare_v2 insert failed");
+  }
+
+  // Update-or-insert prepared statement (safe for first insert)
+  const char* update_sql =
+      "INSERT OR REPLACE INTO rtree_tracks VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+  if (sqlite3_prepare_v2(p_->db, update_sql, -1, &p_->update_stmt, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_prepare_v2 update failed");
   }
 
   // Overlap query prepared statement
@@ -150,10 +192,33 @@ void SqliteRTreeIndex::ClearAll() {
   p_->count = 0;
 }
 
+void SqliteRTreeIndex::Begin() {
+  if (!p_ || !p_->db) throw std::runtime_error("Begin called before Reset");
+  exec_or_throw(p_->db, "BEGIN IMMEDIATE;");
+}
+
+void SqliteRTreeIndex::Commit() {
+  if (!p_ || !p_->db) throw std::runtime_error("Commit called before Reset");
+  exec_or_throw(p_->db, "COMMIT;");
+}
+
+void SqliteRTreeIndex::Rollback() {
+  if (!p_ || !p_->db) throw std::runtime_error("Rollback called before Reset");
+  exec_or_throw(p_->db, "ROLLBACK;");
+}
+
 void SqliteRTreeIndex::InsertPoint(std::uint64_t id, double x, double y, double z) {
   if (!p_ || !p_->insert_stmt) throw std::runtime_error("InsertPoint called before Reset");
   insert_point_stmt_or_throw(p_->insert_stmt, id, x, y, z, /*clear_bindings=*/true);
   p_->count++;
+}
+
+void SqliteRTreeIndex::UpdatePoint(std::uint64_t id, double x, double y, double z) {
+  if (!p_ || !p_->update_stmt) throw std::runtime_error("UpdatePoint called before Reset");
+  insert_point_stmt_or_throw(p_->update_stmt, id, x, y, z, /*clear_bindings=*/true);
+  if (p_->count < static_cast<std::size_t>(id + 1)) {
+    p_->count = static_cast<std::size_t>(id + 1);
+  }
 }
 
 void SqliteRTreeIndex::BuildFromXYZ(const double* xs,
