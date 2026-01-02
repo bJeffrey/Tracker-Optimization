@@ -48,7 +48,9 @@ static Vec3 aer_to_enu(double az_deg, double el_deg, double r_m) {
   return {e,n,u};
 }
 
-EcefAabb ComputeScanAabbEcefApprox(const cfg::SensorCfg& sensor, const cfg::Ownship& ownship) {
+EcefAabb ComputeScanAabbEcefApprox(const cfg::SensorCfg& sensor,
+                                   const cfg::Ownship& ownship,
+                                   double inflate_m) {
   const auto& f = sensor.scan.frustum;
 
   const Vec3 own(ownship.pos_x, ownship.pos_y, ownship.pos_z);
@@ -96,10 +98,9 @@ EcefAabb ComputeScanAabbEcefApprox(const cfg::SensorCfg& sensor, const cfg::Owns
     a.min_z = std::min(a.min_z, c.z); a.max_z = std::max(a.max_z, c.z);
   }
 
-  const double infl = sensor.scan.query_aabb_inflate_m;
-  a.min_x -= infl; a.max_x += infl;
-  a.min_y -= infl; a.max_y += infl;
-  a.min_z -= infl; a.max_z += infl;
+  a.min_x -= inflate_m; a.max_x += inflate_m;
+  a.min_y -= inflate_m; a.max_y += inflate_m;
+  a.min_z -= inflate_m; a.max_z += inflate_m;
 
   return a;
 }

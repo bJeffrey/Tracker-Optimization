@@ -248,25 +248,6 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
     // ScanVolume (optional)
     if (xmlNodePtr scan = find_child(n, "ScanVolume")) {
       s.scan.frame = child_text(scan, "Frame");
-      s.scan.query_aabb_inflate_m = child_double(scan, "QueryAabbInflateMeters", 0.0);
-
-      // -------------------------------
-      // NEW: index tuning knobs (optional)
-      // Stored under ScanVolumeCfg::index (matches XML placement under <ScanVolume>)
-      // -------------------------------
-      {
-        const std::string idx_backend = child_text(scan, "IndexBackend");
-        if (!idx_backend.empty()) {
-          s.scan.index.backend = idx_backend; // e.g., "uniform_grid" or "sqlite_rtree"
-        }
-
-        s.scan.index.cell_m = child_double(scan, "IndexCellMeters", s.scan.index.cell_m);
-        s.scan.index.d_th_m = child_double(scan, "IndexMoveThresholdMeters", s.scan.index.d_th_m);
-        s.scan.index.t_max_s = child_double(scan, "IndexMaxAgeSeconds", s.scan.index.t_max_s);
-
-        s.scan.index.dense_cell_probe_limit =
-          child_u64(scan, "IndexDenseCellProbeLimit", s.scan.index.dense_cell_probe_limit);
-      }
 
 
       bool have_frustum = false;
@@ -328,6 +309,27 @@ static StoreCfg parse_store(void* doc) {
 
     p.mode = xmlu::NodeGetTextChild(n, "Mode");
     p.backend = xmlu::NodeGetTextChild(n, "Backend");
+
+    // Index settings (optional; default values from config_types.h)
+    p.index.query_aabb_inflate_m =
+      xmlu::NodeGetDoubleChild(n, "QueryAabbInflateMeters", p.index.query_aabb_inflate_m);
+
+    const std::string idx_backend = xmlu::NodeGetTextChild(n, "IndexBackend");
+    if (!idx_backend.empty()) {
+      p.index.backend = idx_backend;
+    }
+
+    p.index.cell_m = xmlu::NodeGetDoubleChild(n, "IndexCellMeters", p.index.cell_m);
+    p.index.d_th_m = xmlu::NodeGetDoubleChild(n, "IndexMoveThresholdMeters", p.index.d_th_m);
+    p.index.t_max_s = xmlu::NodeGetDoubleChild(n, "IndexMaxAgeSeconds", p.index.t_max_s);
+
+    const int dense = xmlu::NodeGetIntChild(
+      n,
+      "IndexDenseCellProbeLimit",
+      static_cast<int>(p.index.dense_cell_probe_limit));
+    if (dense > 0) {
+      p.index.dense_cell_probe_limit = static_cast<std::uint64_t>(dense);
+    }
 
     // Sqlite child (optional)
     // For minimal loader: read a few common fields using document paths under this profile is non-trivial without XPath.

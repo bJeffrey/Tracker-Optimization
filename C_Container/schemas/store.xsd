@@ -31,6 +31,14 @@
               <xs:element name="Mode" type="StoreModeType"/>
               <xs:element name="Backend" type="BackendType"/>
 
+              <!-- spatial query backend + tuning (optional) -->
+              <xs:element name="IndexBackend" type="NonEmptyString" minOccurs="0"/>
+              <xs:element name="IndexCellMeters" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="IndexMoveThresholdMeters" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="IndexMaxAgeSeconds" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="IndexDenseCellProbeLimit" type="xs:unsignedLong" minOccurs="0"/>
+              <xs:element name="QueryAabbInflateMeters" type="NonNegativeDouble" minOccurs="0"/>
+
               <xs:element name="Sqlite" minOccurs="0">
                 <xs:complexType>
                   <xs:sequence>

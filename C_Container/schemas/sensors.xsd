@@ -37,15 +37,6 @@
                   <xs:sequence>
                     <xs:element name="Frame" type="FrameType" minOccurs="0"/>
 
-                    <!-- coarse spatial index knobs (optional) -->
-                    <xs:element name="IndexBackend" type="NonEmptyString" minOccurs="0"/>
-                    <xs:element name="IndexCellMeters" type="NonNegativeDouble" minOccurs="0"/>
-                    <xs:element name="IndexMoveThresholdMeters" type="NonNegativeDouble" minOccurs="0"/>
-                    <xs:element name="IndexMaxAgeSeconds" type="NonNegativeDouble" minOccurs="0"/>
-
-                    <!-- probe limit is an integer count -->
-                    <xs:element name="IndexDenseCellProbeLimit" type="xs:unsignedLong" minOccurs="0"/>
-
                     <xs:element name="Frustum" type="FrustumType" minOccurs="0"/>
 
                     <xs:element name="Sphere" minOccurs="0">
@@ -55,8 +46,6 @@
                         </xs:sequence>
                       </xs:complexType>
                     </xs:element>
-
-                    <xs:element name="QueryAabbInflateMeters" type="NonNegativeDouble" minOccurs="0"/>
                   </xs:sequence>
                 </xs:complexType>
               </xs:element>

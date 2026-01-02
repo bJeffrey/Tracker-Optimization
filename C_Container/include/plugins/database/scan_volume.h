@@ -12,6 +12,8 @@ namespace idx {
 // - If ScanVolume.Frame == "OWNERSHIP_BODY", interpret az/el/range as a local
 //   Cartesian frame aligned with ECEF axes (no yaw/pitch/roll; no ENU tangent conversion).
 // - Otherwise, fall back to a deterministic, conservative ECEF-aligned box.
-EcefAabb ComputeScanAabbEcefApprox(const cfg::SensorCfg& sensor, const cfg::Ownship& ownship);
+EcefAabb ComputeScanAabbEcefApprox(const cfg::SensorCfg& sensor,
+                                   const cfg::Ownship& ownship,
+                                   double inflate_m);
 
 } // namespace idx

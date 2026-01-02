@@ -9,6 +9,14 @@
     <Mode>HOT_ONLY</Mode>
     <Backend>SQLITE_RTREE</Backend>
 
+    <!-- Spatial query backend + tuning -->
+    <IndexBackend>uniform_grid</IndexBackend>
+    <IndexCellMeters>2000</IndexCellMeters>
+    <IndexMoveThresholdMeters>500</IndexMoveThresholdMeters>
+    <IndexMaxAgeSeconds>1.0</IndexMaxAgeSeconds>
+    <IndexDenseCellProbeLimit>200000</IndexDenseCellProbeLimit>
+    <QueryAabbInflateMeters>2000</QueryAabbInflateMeters>
+
     <Sqlite>
       <!-- Entire DB in RAM -->
       <DbUri>:memory:</DbUri>
@@ -24,6 +32,14 @@
   <Profile id="store_hot_plus_warm_sqlite_file">
     <Mode>HOT_PLUS_WARM</Mode>
     <Backend>SQLITE_RTREE</Backend>
+
+    <!-- Spatial query backend + tuning -->
+    <IndexBackend>uniform_grid</IndexBackend>
+    <IndexCellMeters>2000</IndexCellMeters>
+    <IndexMoveThresholdMeters>500</IndexMoveThresholdMeters>
+    <IndexMaxAgeSeconds>1.0</IndexMaxAgeSeconds>
+    <IndexDenseCellProbeLimit>200000</IndexDenseCellProbeLimit>
+    <QueryAabbInflateMeters>2000</QueryAabbInflateMeters>
 
     <Sqlite>
       <!-- Warm store on disk -->

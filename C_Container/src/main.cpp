@@ -416,8 +416,11 @@ bool setup_scan_context(PipelineState& state) {
   }
 
   const cfg::SensorCfg& sensor  = state.cfg->sensors.sensors.front();
+  const cfg::StoreProfile& store = state.cfg->store_profile;
   state.scan.sensor             = &sensor;
-  state.scan.scan_aabb          = idx::ComputeScanAabbEcefApprox(sensor, state.cfg->ownship);
+  const double inflate_m =
+    (store.index.query_aabb_inflate_m > 0.0) ? store.index.query_aabb_inflate_m : 2000.0;
+  state.scan.scan_aabb          = idx::ComputeScanAabbEcefApprox(sensor, state.cfg->ownship, inflate_m);
 
   // Build kinematics batch from TrackBatch positions.
   build_kinematics_from_track_batch(state.tb, state.scan.tbm);
@@ -430,7 +433,7 @@ bool setup_scan_context(PipelineState& state) {
   state.scan.mcfg.scan_rate_hz  = (state.cli.scan_hz > 0.0) ? state.cli.scan_hz : 1.0;
 
   // ---- Create spatial index backend (XML default, CLI override)
-  const std::string backend_xml = sensor.scan.index.backend;
+  const std::string backend_xml = store.index.backend;
   state.scan.icfg.backend =
     !state.cli.index_backend_cli.empty() ? state.cli.index_backend_cli : backend_xml;
   if (state.scan.icfg.backend.empty()) {
@@ -438,23 +441,22 @@ bool setup_scan_context(PipelineState& state) {
   }
 
   // Base value for derivations
-  state.scan.scan_inflate_m =
-    (sensor.scan.query_aabb_inflate_m > 0.0) ? sensor.scan.query_aabb_inflate_m : 2000.0;
+  state.scan.scan_inflate_m = inflate_m;
 
   // Cell size: CLI > XML > derived
   state.scan.icfg.grid_cell_m =
     (state.cli.cell_m_cli > 0.0) ? state.cli.cell_m_cli :
-    (sensor.scan.index.cell_m > 0.0 ? sensor.scan.index.cell_m : state.scan.scan_inflate_m);
+    (store.index.cell_m > 0.0 ? store.index.cell_m : state.scan.scan_inflate_m);
 
   // Move threshold: CLI > XML > derived
   state.scan.d_th_m =
     (state.cli.d_th_m_cli > 0.0) ? state.cli.d_th_m_cli :
-    (sensor.scan.index.d_th_m > 0.0 ? sensor.scan.index.d_th_m : (0.25 * state.scan.icfg.grid_cell_m));
+    (store.index.d_th_m > 0.0 ? store.index.d_th_m : (0.25 * state.scan.icfg.grid_cell_m));
 
   // Max age: CLI > XML > derived (~2 scans)
   state.scan.t_max_s =
     (state.cli.t_max_s_cli > 0.0) ? state.cli.t_max_s_cli :
-    (sensor.scan.index.t_max_s > 0.0 ? sensor.scan.index.t_max_s : (2.0 / state.scan.mcfg.scan_rate_hz));
+    (store.index.t_max_s > 0.0 ? store.index.t_max_s : (2.0 / state.scan.mcfg.scan_rate_hz));
 
   state.scan.index = idx::CreateSpatialIndex(state.scan.icfg);
   state.scan.index->Reserve(state.scan.tbm.n);
@@ -462,7 +464,7 @@ bool setup_scan_context(PipelineState& state) {
   // Apply probe limit if backend supports it (UniformGridIndex)
   if (state.scan.icfg.backend == "uniform_grid") {
     if (auto* grid = dynamic_cast<idx::UniformGridIndex*>(state.scan.index.get())) {
-      grid->SetDenseCellProbeLimit(sensor.scan.index.dense_cell_probe_limit);
+      grid->SetDenseCellProbeLimit(store.index.dense_cell_probe_limit);
     }
   }
 
@@ -471,7 +473,7 @@ bool setup_scan_context(PipelineState& state) {
 
   std::cout << "Scan-driven coarse query (loop):\n";
   std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
-            << " inflate_m=" << sensor.scan.query_aabb_inflate_m << "\n";
+            << " inflate_m=" << state.scan.scan_inflate_m << "\n";
   std::cout << "  aabb.min=(" << state.scan.scan_aabb.min_x << "," << state.scan.scan_aabb.min_y
             << "," << state.scan.scan_aabb.min_z << ")\n";
   std::cout << "  aabb.max=(" << state.scan.scan_aabb.max_x << "," << state.scan.scan_aabb.max_y
@@ -485,7 +487,7 @@ bool setup_scan_context(PipelineState& state) {
     std::cout << "  grid.cell_m=" << state.scan.icfg.grid_cell_m
               << " d_th_m=" << state.scan.d_th_m
               << " t_max_s=" << state.scan.t_max_s
-              << " dense_cell_probe_limit=" << sensor.scan.index.dense_cell_probe_limit
+              << " dense_cell_probe_limit=" << store.index.dense_cell_probe_limit
               << "\n";
   } else {
     std::cout << "  d_th_m=" << state.scan.d_th_m

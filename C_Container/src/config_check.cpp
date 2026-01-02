@@ -56,7 +56,14 @@ static void print_bundle(const cfg::ConfigBundle& b) {
   std::cout << "[StoreProfile]\n";
   std::cout << "  id=" << b.store_profile.id
             << " mode=" << b.store_profile.mode
-            << " backend=" << b.store_profile.backend << "\n\n";
+            << " backend=" << b.store_profile.backend << "\n";
+  std::cout << "  index.backend=" << b.store_profile.index.backend
+            << " inflate_m=" << b.store_profile.index.query_aabb_inflate_m
+            << " cell_m=" << b.store_profile.index.cell_m
+            << " d_th_m=" << b.store_profile.index.d_th_m
+            << " t_max_s=" << b.store_profile.index.t_max_s
+            << " dense_limit=" << b.store_profile.index.dense_cell_probe_limit
+            << "\n\n";
 
   std::cout << "[Scenario]\n";
   std::cout << "  id=" << b.scenario.id << " name=\"" << b.scenario.name << "\"\n";
@@ -74,7 +81,6 @@ static void print_bundle(const cfg::ConfigBundle& b) {
                 << " frustum(az=" << s.scan.frustum.az_min_deg << ".." << s.scan.frustum.az_max_deg
                 << " el=" << s.scan.frustum.el_min_deg << ".." << s.scan.frustum.el_max_deg
                 << " r=" << s.scan.frustum.r_min_m << ".." << s.scan.frustum.r_max_m << ")"
-                << " inflate_m=" << s.scan.query_aabb_inflate_m
                 << " rate_hz=" << s.scan_rate_hz
                 << "\n";
     }
