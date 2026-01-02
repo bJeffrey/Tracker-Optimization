@@ -48,6 +48,16 @@ public:
     updater_.Apply(t_now_s, xs, ys, zs, *index_);
   }
 
+  void UpdateTracksSubset(double t_now_s,
+                          const double* xs,
+                          const double* ys,
+                          const double* zs,
+                          const trk::IdList& ids) {
+    if (!index_) return;
+    if (ids.empty()) return;
+    updater_.ApplySubset(t_now_s, xs, ys, zs, ids.data(), ids.size(), *index_);
+  }
+
   void FinalizeScan(double /*t_now_s*/,
                     const double* /*xs*/,
                     const double* /*ys*/,
@@ -59,6 +69,8 @@ public:
     if (!index_) return {};
     return index_->QueryAabb(aabb);
   }
+
+  trk::IdList PrefetchHot(const idx::EcefAabb& /*aabb*/) override { return {}; }
 
   std::size_t NumUpdatedLastUpdate() const override {
     return updater_.NumUpdatedLastApply();
@@ -90,6 +102,8 @@ public:
         warm_index_(std::make_unique<idx::SqliteRTreeIndexBackend>(cfg_.sqlite_db_uri)) {}
 
   void Reserve(std::size_t n_tracks) override {
+    n_tracks_ = n_tracks;
+    hot_mask_.assign(n_tracks_, 0);
     hot_.Reserve(n_tracks);
     warm_index_->Reserve(n_tracks);
     warm_updater_.Reset(n_tracks);
@@ -105,7 +119,12 @@ public:
                     const double* ys,
                     const double* zs,
                     std::size_t n_tracks) override {
-    hot_.UpdateTracks(t_now_s, xs, ys, zs, n_tracks);
+    (void)n_tracks;
+    if (!hot_ids_.empty()) {
+      hot_.UpdateTracksSubset(t_now_s, xs, ys, zs, hot_ids_);
+    } else {
+      hot_.UpdateTracks(t_now_s, xs, ys, zs, n_tracks);
+    }
   }
 
   void FinalizeScan(double t_now_s,
@@ -139,7 +158,36 @@ public:
   }
 
   trk::IdList QueryAabb(const idx::EcefAabb& aabb) const override {
-    return warm_index_->QueryAabb(aabb);
+    if (hot_ids_.empty()) {
+      return warm_index_->QueryAabb(aabb);
+    }
+
+    auto ids = hot_.QueryAabb(aabb);
+    if (ids.empty()) return ids;
+
+    std::size_t w = 0;
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+      const std::size_t id = static_cast<std::size_t>(ids[i]);
+      if (id < hot_mask_.size() && hot_mask_[id]) {
+        ids[w++] = ids[i];
+      }
+    }
+    ids.resize(w);
+    return ids;
+  }
+
+  trk::IdList PrefetchHot(const idx::EcefAabb& aabb) override {
+    // Clear previous mask.
+    for (std::uint64_t id : hot_ids_) {
+      if (id < hot_mask_.size()) hot_mask_[static_cast<std::size_t>(id)] = 0;
+    }
+
+    hot_ids_ = warm_index_->QueryAabb(aabb);
+    for (std::uint64_t id : hot_ids_) {
+      if (id < hot_mask_.size()) hot_mask_[static_cast<std::size_t>(id)] = 1;
+    }
+
+    return hot_ids_;
   }
 
   std::size_t NumUpdatedLastUpdate() const override {
@@ -155,6 +203,9 @@ private:
   HotOnlyTrackDatabase hot_;
   std::unique_ptr<idx::ISpatialIndex3D> warm_index_;
   idx::IndexUpdateManager warm_updater_;
+  trk::IdList hot_ids_;
+  std::vector<std::uint8_t> hot_mask_;
+  std::size_t n_tracks_ = 0;
 };
 
 } // namespace

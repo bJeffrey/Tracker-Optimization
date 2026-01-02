@@ -45,6 +45,9 @@ public:
   // Query AABB overlap candidates.
   virtual trk::IdList QueryAabb(const idx::EcefAabb& aabb) const = 0;
 
+  // Warm prefetch to define the hot working set (hot+warm only).
+  virtual trk::IdList PrefetchHot(const idx::EcefAabb& aabb) = 0;
+
   virtual std::size_t NumUpdatedLastUpdate() const = 0;
   virtual bool SupportsIncrementalUpdates() const = 0;
 };

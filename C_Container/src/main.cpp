@@ -102,6 +102,7 @@ struct ScanContext {
   idx::EcefAabb scan_aabb{};
   idx::SpatialIndexConfig icfg{};
   std::unique_ptr<db::ITrackDatabase> track_db;
+  trk::IdList hot_ids;
   trk::TrackKinematicsBatch tbm;
   trk::ModelBuckets buckets;
   trk::MotionModel_CA9 model_ca;
@@ -128,6 +129,7 @@ struct PipelineState {
   RunStats stats;
   ScanContext scan;
   bool debug_timing = false;
+  trk::IdList changed_ids;
 };
 
 bool is_debug_timing_enabled() {
@@ -492,6 +494,10 @@ bool setup_scan_context(PipelineState& state) {
     const auto init_t1 = std::chrono::high_resolution_clock::now();
     const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
     std::cout << "  warm_init_s=" << init_s << "\n";
+
+    // Stage 1: warm prefetch to define hot working set for the scan volume.
+    state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
+    std::cout << "  hot_prefetch_n=" << state.scan.hot_ids.size() << "\n";
   }
 
   std::cout << "Scan-driven coarse query (loop):\n";
@@ -529,6 +535,10 @@ void process_scan_tick(PipelineState& state,
                        double t_s) {
   ++state.stats.scan_count;
 
+  if (state.cfg->store_profile.mode == "HOT_PLUS_WARM") {
+    state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
+  }
+
   const auto t0 = std::chrono::high_resolution_clock::now();
   state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
   const auto t1 = std::chrono::high_resolution_clock::now();
@@ -551,11 +561,12 @@ void process_scan_tick(PipelineState& state,
   const auto t3 = std::chrono::high_resolution_clock::now();
 
   // Persist post-scan updates to warm store (if configured).
-  // Heuristic: persist warm updates only for current scan candidates.
+  // Heuristic: treat all scan candidates as changed until filter/maintenance marks specific ids.
+  state.changed_ids = ids;
   bool did_finalize = false;
-  if (!ids.empty()) {
+  if (!state.changed_ids.empty()) {
     state.scan.track_db->FinalizeScan(
-      t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n, &ids);
+      t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n, &state.changed_ids);
     did_finalize = true;
   }
   const auto t4 = std::chrono::high_resolution_clock::now();
