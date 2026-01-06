@@ -32,6 +32,11 @@ public:
                    const double* xs, const double* ys, const double* zs,
                    const std::uint64_t* ids, std::size_t n_ids,
                    ISpatialIndex3D& index);
+  // Apply updates for subset but honor movement/time thresholds.
+  void ApplySubsetThreshold(double t_now_s,
+                            const double* xs, const double* ys, const double* zs,
+                            const std::uint64_t* ids, std::size_t n_ids,
+                            ISpatialIndex3D& index);
 
   std::size_t NumUpdatedLastApply() const { return n_updated_last_; }
 

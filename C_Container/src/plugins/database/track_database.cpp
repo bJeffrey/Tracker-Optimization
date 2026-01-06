@@ -6,6 +6,7 @@
 #include "plugins/database/uniform_grid_index.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 
 namespace db {
@@ -55,7 +56,7 @@ public:
                           const trk::IdList& ids) {
     if (!index_) return;
     if (ids.empty()) return;
-    updater_.ApplySubset(t_now_s, xs, ys, zs, ids.data(), ids.size(), *index_);
+    updater_.ApplySubsetThreshold(t_now_s, xs, ys, zs, ids.data(), ids.size(), *index_);
   }
 
   void FinalizeScan(double /*t_now_s*/,
@@ -80,6 +81,9 @@ public:
     return index_ ? index_->SupportsIncrementalUpdates() : false;
   }
 
+  TrackDbTimingStats GetTimingStats() const override { return stats_; }
+  void ResetTimingStats() override { stats_ = TrackDbTimingStats{}; }
+
   void ApplyDenseCellProbeLimit() {
     if (cfg_.backend == "uniform_grid") {
       if (auto* grid = dynamic_cast<idx::UniformGridIndex*>(index_.get())) {
@@ -92,6 +96,7 @@ private:
   TrackDatabaseConfig cfg_;
   idx::IndexUpdateManager updater_;
   std::unique_ptr<idx::ISpatialIndex3D> index_;
+  TrackDbTimingStats stats_{};
 };
 
 class HotWarmTrackDatabase final : public ITrackDatabase {
@@ -100,6 +105,17 @@ public:
       : cfg_(cfg),
         hot_(cfg),
         warm_index_(std::make_unique<idx::SqliteRTreeIndexBackend>(cfg_.sqlite_db_uri)) {}
+  ~HotWarmTrackDatabase() override {
+    if (in_transaction_) {
+      if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_.get())) {
+        try {
+          sqlite->Commit();
+        } catch (...) {
+          try { sqlite->Rollback(); } catch (...) {}
+        }
+      }
+    }
+  }
 
   void Reserve(std::size_t n_tracks) override {
     n_tracks_ = n_tracks;
@@ -136,24 +152,70 @@ public:
     (void)n_tracks;
     // TODO: warm-store prefetch/merge goes here.
     if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_.get())) {
-      sqlite->Begin();
+      const bool need_begin = !in_transaction_;
+      std::chrono::high_resolution_clock::time_point t0;
+      std::chrono::high_resolution_clock::time_point t1;
+      if (need_begin) {
+        t0 = std::chrono::high_resolution_clock::now();
+        sqlite->Begin();
+        t1 = std::chrono::high_resolution_clock::now();
+      }
       try {
+        const auto t_apply0 = std::chrono::high_resolution_clock::now();
         if (ids && !ids->empty()) {
-          warm_updater_.ApplySubset(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
+          warm_updater_.ApplySubsetThreshold(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
         } else {
           warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
         }
-        sqlite->Commit();
+        const auto t_apply1 = std::chrono::high_resolution_clock::now();
+        stats_.last_finalize_begin_s = need_begin ? std::chrono::duration<double>(t1 - t0).count() : 0.0;
+        stats_.last_finalize_apply_s = std::chrono::duration<double>(t_apply1 - t_apply0).count();
+        stats_.last_finalize_commit_s = 0.0;
+
+        if (need_begin) {
+          stats_.finalize_begin_acc_s += stats_.last_finalize_begin_s;
+          ++stats_.finalize_begin_calls;
+        }
+        stats_.finalize_apply_acc_s += stats_.last_finalize_apply_s;
+        ++stats_.finalize_calls;
+
+        if (cfg_.warm_commit_every_scans > 1) {
+          in_transaction_ = true;
+          ++pending_scans_;
+        } else {
+          pending_scans_ = 1;
+        }
+
+        if (cfg_.warm_commit_every_scans <= 1 ||
+            pending_scans_ >= cfg_.warm_commit_every_scans) {
+          const auto t_commit0 = std::chrono::high_resolution_clock::now();
+          sqlite->Commit();
+          const auto t_commit1 = std::chrono::high_resolution_clock::now();
+          stats_.last_finalize_commit_s = std::chrono::duration<double>(t_commit1 - t_commit0).count();
+          stats_.finalize_commit_acc_s += stats_.last_finalize_commit_s;
+          ++stats_.finalize_commit_calls;
+          pending_scans_ = 0;
+          in_transaction_ = false;
+        }
       } catch (...) {
         sqlite->Rollback();
+        in_transaction_ = false;
+        pending_scans_ = 0;
         throw;
       }
     } else {
+      const auto t1 = std::chrono::high_resolution_clock::now();
       if (ids && !ids->empty()) {
-        warm_updater_.ApplySubset(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
+        warm_updater_.ApplySubsetThreshold(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
       } else {
         warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
       }
+      const auto t2 = std::chrono::high_resolution_clock::now();
+      stats_.last_finalize_begin_s = 0.0;
+      stats_.last_finalize_apply_s = std::chrono::duration<double>(t2 - t1).count();
+      stats_.last_finalize_commit_s = 0.0;
+      stats_.finalize_apply_acc_s += stats_.last_finalize_apply_s;
+      ++stats_.finalize_calls;
     }
   }
 
@@ -182,7 +244,12 @@ public:
       if (id < hot_mask_.size()) hot_mask_[static_cast<std::size_t>(id)] = 0;
     }
 
+    const auto t0 = std::chrono::high_resolution_clock::now();
     hot_ids_ = warm_index_->QueryAabb(aabb);
+    const auto t1 = std::chrono::high_resolution_clock::now();
+    stats_.last_prefetch_s = std::chrono::duration<double>(t1 - t0).count();
+    stats_.prefetch_acc_s += stats_.last_prefetch_s;
+    ++stats_.prefetch_calls;
     for (std::uint64_t id : hot_ids_) {
       if (id < hot_mask_.size()) hot_mask_[static_cast<std::size_t>(id)] = 1;
     }
@@ -198,6 +265,9 @@ public:
     return hot_.SupportsIncrementalUpdates();
   }
 
+  TrackDbTimingStats GetTimingStats() const override { return stats_; }
+  void ResetTimingStats() override { stats_ = TrackDbTimingStats{}; }
+
 private:
   TrackDatabaseConfig cfg_;
   HotOnlyTrackDatabase hot_;
@@ -206,6 +276,9 @@ private:
   trk::IdList hot_ids_;
   std::vector<std::uint8_t> hot_mask_;
   std::size_t n_tracks_ = 0;
+  TrackDbTimingStats stats_{};
+  bool in_transaction_ = false;
+  std::size_t pending_scans_ = 0;
 };
 
 } // namespace

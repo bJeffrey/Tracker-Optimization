@@ -361,6 +361,19 @@ if (ENABLE_LTO AND TARGET demo)
 endif()
 
 # ------------------------------
+# Microbench executable
+# ------------------------------
+add_executable(bench_micro src/bench_micro.cpp)
+target_include_directories(bench_micro PRIVATE ${TRACKER_PUBLIC_INCLUDE_DIRS})
+target_link_libraries(bench_micro PRIVATE plugin_framework plugin_propagator)
+if (ENABLE_CONFIG)
+  target_link_libraries(bench_micro PRIVATE config_loader)
+endif()
+if (ENABLE_LTO AND TARGET bench_micro)
+  set_property(TARGET bench_micro PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
+# ------------------------------
 # Build Summary
 # ------------------------------
 message(STATUS "")

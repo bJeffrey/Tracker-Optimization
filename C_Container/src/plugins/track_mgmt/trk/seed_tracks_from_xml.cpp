@@ -176,18 +176,18 @@ void SeedTracksFromTruthXml(const std::string& targets_xml,
     // p0 = p - v*age + 0.5*a*age^2
     const double a2 = age_s * age_s;
 
-    const double vx0 = truth.vx[i] - truth.ax[i] * age_s;
-    const double vy0 = truth.vy[i] - truth.ay[i] * age_s;
-    const double vz0 = truth.vz[i] - truth.az[i] * age_s;
+    const double vx0 = truth.vel.x[i] - truth.acc.x[i] * age_s;
+    const double vy0 = truth.vel.y[i] - truth.acc.y[i] * age_s;
+    const double vz0 = truth.vel.z[i] - truth.acc.z[i] * age_s;
 
-    const double x0 = truth.x[i] - truth.vx[i] * age_s + 0.5 * truth.ax[i] * a2;
-    const double y0 = truth.y[i] - truth.vy[i] * age_s + 0.5 * truth.ay[i] * a2;
-    const double z0 = truth.z[i] - truth.vz[i] * age_s + 0.5 * truth.az[i] * a2;
+    const double x0 = truth.pos.x[i] - truth.vel.x[i] * age_s + 0.5 * truth.acc.x[i] * a2;
+    const double y0 = truth.pos.y[i] - truth.vel.y[i] * age_s + 0.5 * truth.acc.y[i] * a2;
+    const double z0 = truth.pos.z[i] - truth.vel.z[i] * age_s + 0.5 * truth.acc.z[i] * a2;
 
     double* xi = tracks.x_ptr(i);
     xi[0]=x0;  xi[1]=y0;  xi[2]=z0;
     xi[3]=vx0; xi[4]=vy0; xi[5]=vz0;
-    xi[6]=truth.ax[i]; xi[7]=truth.ay[i]; xi[8]=truth.az[i];
+    xi[6]=truth.acc.x[i]; xi[7]=truth.acc.y[i]; xi[8]=truth.acc.z[i];
 
     tracks.pos_x[i] = xi[0];
     tracks.pos_y[i] = xi[1];

@@ -18,6 +18,23 @@ struct TrackDatabaseConfig {
   std::uint64_t dense_cell_probe_limit = 200000;
   double d_th_m = 500.0;
   double t_max_s = 1.0;
+  std::size_t warm_commit_every_scans = 1;
+};
+
+struct TrackDbTimingStats {
+  double prefetch_acc_s = 0.0;
+  std::size_t prefetch_calls = 0;
+  double finalize_begin_acc_s = 0.0;
+  std::size_t finalize_begin_calls = 0;
+  double finalize_apply_acc_s = 0.0;
+  double finalize_commit_acc_s = 0.0;
+  std::size_t finalize_commit_calls = 0;
+  std::size_t finalize_calls = 0;
+
+  double last_prefetch_s = 0.0;
+  double last_finalize_begin_s = 0.0;
+  double last_finalize_apply_s = 0.0;
+  double last_finalize_commit_s = 0.0;
 };
 
 class ITrackDatabase {
@@ -50,6 +67,9 @@ public:
 
   virtual std::size_t NumUpdatedLastUpdate() const = 0;
   virtual bool SupportsIncrementalUpdates() const = 0;
+
+  virtual TrackDbTimingStats GetTimingStats() const = 0;
+  virtual void ResetTimingStats() = 0;
 };
 
 std::unique_ptr<ITrackDatabase> CreateTrackDatabase(const TrackDatabaseConfig& cfg);

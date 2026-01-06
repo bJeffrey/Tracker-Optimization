@@ -274,9 +274,9 @@ void GenerateTruthFromXml(const std::string& targets_xml,
     a.z = amag * uz;
 
     // Write truth
-    truth.x[i]  = p.x; truth.y[i]  = p.y; truth.z[i]  = p.z;
-    truth.vx[i] = v.x; truth.vy[i] = v.y; truth.vz[i] = v.z;
-    truth.ax[i] = a.x; truth.ay[i] = a.y; truth.az[i] = a.z;
+    truth.pos.x[i] = p.x; truth.pos.y[i] = p.y; truth.pos.z[i] = p.z;
+    truth.vel.x[i] = v.x; truth.vel.y[i] = v.y; truth.vel.z[i] = v.z;
+    truth.acc.x[i] = a.x; truth.acc.y[i] = a.y; truth.acc.z[i] = a.z;
   }
 
   cfg::xmlu::FreeXmlDoc(doc);

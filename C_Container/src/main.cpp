@@ -71,6 +71,7 @@ struct CliArgs {
   std::string output_dir;
   bool verbose = false;
   std::size_t tracks_cli = 0;
+  std::size_t warm_commit_every_scans = 1;
 };
 
 // ------------------------------
@@ -92,6 +93,12 @@ struct RunStats {
   std::size_t k_acc = 0;
   double finalize_acc_s = 0.0;
   std::size_t finalize_calls = 0;
+
+  double prefetch_acc_s = 0.0;
+  std::size_t prefetch_calls = 0;
+  double finalize_begin_acc_s = 0.0;
+  double finalize_apply_acc_s = 0.0;
+  double finalize_commit_acc_s = 0.0;
 };
 
 /**
@@ -197,6 +204,7 @@ CliArgs parse_cli(int argc, char** argv) {
   cli.output_dir        = arg_value(argc, argv, "--output-dir", "./logs");
   cli.verbose           = has_flag(argc, argv, "--verbose");
   cli.tracks_cli        = arg_size_t(argc, argv, "--tracks", 0);
+  cli.warm_commit_every_scans = arg_size_t(argc, argv, "--warm-commit-every", 1);
   return cli;
 }
 
@@ -477,6 +485,7 @@ bool setup_scan_context(PipelineState& state) {
   db_cfg.dense_cell_probe_limit = store.index.dense_cell_probe_limit;
   db_cfg.d_th_m = state.scan.d_th_m;
   db_cfg.t_max_s = state.scan.t_max_s;
+  db_cfg.warm_commit_every_scans = std::max<std::size_t>(1, state.cli.warm_commit_every_scans);
 
   state.scan.track_db = db::CreateTrackDatabase(db_cfg);
   state.scan.track_db->Reserve(state.scan.tbm.n);
@@ -494,6 +503,7 @@ bool setup_scan_context(PipelineState& state) {
     const auto init_t1 = std::chrono::high_resolution_clock::now();
     const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
     std::cout << "  warm_init_s=" << init_s << "\n";
+    state.scan.track_db->ResetTimingStats();
 
     // Stage 1: warm prefetch to define hot working set for the scan volume.
     state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
@@ -605,16 +615,35 @@ void process_scan_tick(PipelineState& state,
   }
 
   if (state.debug_timing) {
+    const db::TrackDbTimingStats db_stats = state.scan.track_db->GetTimingStats();
+    if (db_stats.prefetch_calls > state.stats.prefetch_calls) {
+      state.stats.prefetch_acc_s = db_stats.prefetch_acc_s;
+      state.stats.prefetch_calls = db_stats.prefetch_calls;
+    }
+    if (db_stats.finalize_calls > state.stats.finalize_calls) {
+      state.stats.finalize_begin_acc_s = db_stats.finalize_begin_acc_s;
+      state.stats.finalize_apply_acc_s = db_stats.finalize_apply_acc_s;
+      state.stats.finalize_commit_acc_s = db_stats.finalize_commit_acc_s;
+    }
+
     const double update_s = std::chrono::duration<double>(t1 - t0).count();
     const double query_s = std::chrono::duration<double>(t2 - t1).count();
     const double stages_s = std::chrono::duration<double>(t3 - t2).count();
     const double finalize_s = did_finalize ? std::chrono::duration<double>(t4 - t3).count() : 0.0;
     const double cov_s = std::chrono::duration<double>(t5 - t4).count();
+    const double prefetch_s = db_stats.last_prefetch_s;
+    const double finalize_begin_s = db_stats.last_finalize_begin_s;
+    const double finalize_apply_s = db_stats.last_finalize_apply_s;
+    const double finalize_commit_s = db_stats.last_finalize_commit_s;
     std::cout << "  timing_s"
+              << " prefetch=" << prefetch_s
               << " update=" << update_s
               << " query=" << query_s
               << " stages=" << stages_s
               << " finalize=" << finalize_s
+              << " finalize_begin=" << finalize_begin_s
+              << " finalize_apply=" << finalize_apply_s
+              << " finalize_commit=" << finalize_commit_s
               << " cov_age=" << cov_s
               << "\n";
   }
@@ -680,14 +709,29 @@ void write_csvs(const PipelineState& state) {
       (state.stats.cov_age_calls ? (state.stats.cov_age_acc_s / state.stats.cov_age_calls) : 0.0);
   const double avg_finalize_s =
       (state.stats.finalize_calls ? (state.stats.finalize_acc_s / state.stats.finalize_calls) : 0.0);
+  const db::TrackDbTimingStats db_stats =
+      state.scan.track_db ? state.scan.track_db->GetTimingStats() : db::TrackDbTimingStats{};
+  const double avg_prefetch_s =
+      (db_stats.prefetch_calls ? (db_stats.prefetch_acc_s / db_stats.prefetch_calls) : 0.0);
+  const double avg_finalize_begin_s =
+      (db_stats.finalize_begin_calls ? (db_stats.finalize_begin_acc_s / db_stats.finalize_begin_calls) : 0.0);
+  const double avg_finalize_apply_s =
+      (db_stats.finalize_calls ? (db_stats.finalize_apply_acc_s / db_stats.finalize_calls) : 0.0);
+  const double avg_finalize_commit_s =
+      (db_stats.finalize_commit_calls ? (db_stats.finalize_commit_acc_s / db_stats.finalize_commit_calls) : 0.0);
 
   auto write_header = [](std::ostream& os) {
     os
       << "date,time,version,system_xml,xsd_dir,targets_xml,dim,tracks,dt_s,run_s,scan_hz,"
-         "scan_count,loop_time_s,avg_update_s,avg_query_s,avg_n_updated,finalize_total_s,finalize_avg_s,"
+         "scan_count,loop_time_s,loop_time_per_scan_s,avg_update_s,avg_query_s,avg_n_updated,finalize_total_s,finalize_avg_s,"
+         "warm_commit_every_scans,"
+         "finalize_begin_total_s,finalize_begin_avg_s,finalize_apply_total_s,finalize_apply_avg_s,"
+         "finalize_commit_total_s,finalize_commit_avg_s,prefetch_total_s,prefetch_avg_s,"
          "cov_age_calls,avg_tracks_per_call,cov_age_total_s,cov_age_avg_s,checksum\n";
   };
   auto write_row = [&](std::ostream& os) {
+    const double loop_per_scan =
+      (state.stats.scan_count > 0 ? (state.stats.loop_s / static_cast<double>(state.stats.scan_count)) : 0.0);
     os
       << date_str << ','
       << time_str << ','
@@ -702,11 +746,21 @@ void write_csvs(const PipelineState& state) {
       << state.cli.scan_hz << ','
       << state.stats.scan_count << ','
       << state.stats.loop_s << ','
+      << loop_per_scan << ','
       << avg_update_s << ','
       << avg_query_s << ','
       << avg_n_updated << ','
       << state.stats.finalize_acc_s << ','
       << avg_finalize_s << ','
+      << state.cli.warm_commit_every_scans << ','
+      << db_stats.finalize_begin_acc_s << ','
+      << avg_finalize_begin_s << ','
+      << db_stats.finalize_apply_acc_s << ','
+      << avg_finalize_apply_s << ','
+      << db_stats.finalize_commit_acc_s << ','
+      << avg_finalize_commit_s << ','
+      << db_stats.prefetch_acc_s << ','
+      << avg_prefetch_s << ','
       << state.stats.cov_age_calls << ','
       << avg_tracks_per_call << ','
       << state.stats.cov_age_acc_s << ','
@@ -721,14 +775,24 @@ void write_csvs(const PipelineState& state) {
   const fs::path append_path = fs::path(state.cli.output_dir) / "performance.csv";
   std::error_code ec;
   bool has_header = false;
+  bool header_has_new_cols = false;
   if (fs::exists(append_path, ec) && !ec) {
     const auto sz = fs::file_size(append_path, ec);
     has_header = (!ec && sz > 0);
+    if (has_header) {
+      std::ifstream in(append_path);
+      std::string line;
+      if (in && std::getline(in, line)) {
+        header_has_new_cols =
+          (line.find("finalize_begin_total_s") != std::string::npos) &&
+          (line.find("warm_commit_every_scans") != std::string::npos);
+      }
+    }
   }
   std::ofstream append_out(append_path, std::ios::app);
   if (append_out) {
     // Write header only when the rolling file is created.
-    if (!has_header) {
+    if (!has_header || !header_has_new_cols) {
       write_header(append_out);
     }
     write_row(append_out);
