@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
 DEMO_BIN="${BUILD_DIR}/demo"
-export TRACKER_LOG_LEVEL="${TRACKER_LOG_LEVEL:-debug}"
+export TRACKER_LOG_LEVEL="${TRACKER_LOG_LEVEL:-INFO}"
 RUN_S="${RUN_S:-30.0}"
 WARM_COMMIT_EVERY_N_SCANS="${WARM_COMMIT_EVERY_N_SCANS:-2}"
 
@@ -20,4 +20,3 @@ exec "$DEMO_BIN" \
   --config "${ROOT_DIR}/config/system.xml" \
   --xsd-dir "${ROOT_DIR}/schemas" \
   --run-s "${RUN_S}" \
-  --verbose

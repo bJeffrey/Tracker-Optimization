@@ -13,6 +13,7 @@ Stage 1: Scan prefetch (before measurements)
 - Warm: query R*Tree for scan AABB -> candidate IDs.
 - Hot: load those IDs' state + covariance + metadata into hot.
 - Batch use: build hot TrackBatch and TrackKinematicsBatch for all active IDs in one contiguous allocation.
+Status: PARTIAL (IDs prefetched; full state/cov hydration not implemented)
 
 Stage 2: Predict / propagate to scan time
 - Hot: update state + covariance for hot tracks only.
@@ -43,6 +44,7 @@ Stage 8: Finalize scan (persist to warm)
 - Warm: update only tracks that changed (state + covariance + metadata).
 - Hot: remains as working set until next scan.
 - Optimization: write back only changed IDs, in a single transaction per scan. Avoid bulk re-writes.
+Status: PARTIAL (index writeback only; state/cov/metadata persistence not implemented)
 
 Key performance optimizations
 - Hot contains only working set: RAM scales with scan density, not total tracks.
@@ -50,3 +52,9 @@ Key performance optimizations
 - Warm updates only for changed tracks: eliminates large disk writes per scan.
 - Index update thresholds: hot index uses tighter thresholds; warm index uses looser thresholds to reduce disk churn.
 - Prefetch window: optionally expand AABB by a look-ahead buffer so hot has tracks needed for the next scan, reducing warm query frequency.
+
+Worker thread plan (additions)
+- Prefetch worker: load next-scan AABB IDs and hydrate hot state/cov/metadata ahead of measurement time.
+- Finalize worker: async warm flush after scan; write index + state/cov/metadata in a single transaction.
+- Triggers: scan count, buffered track count, and shutdown (configurable thresholds in store.xml).
+- Telemetry: prefetch latency, flush latency, queue depth, cache hit rate, commit timing captured in performance.csv.

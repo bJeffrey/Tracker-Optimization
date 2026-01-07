@@ -69,7 +69,6 @@ struct CliArgs {
   double d_th_m_cli = 0.0;
   double t_max_s_cli = 0.0;
   std::string output_dir;
-  bool verbose = false;
   std::size_t tracks_cli = 0;
   std::size_t warm_commit_every_scans = 0;
 };
@@ -139,10 +138,40 @@ struct PipelineState {
   trk::IdList changed_ids;
 };
 
-bool is_debug_timing_enabled() {
+enum class LogLevel : int {
+  TRACE = 0,
+  DEBUG = 1,
+  INFO  = 2,
+  WARN  = 3,
+  ERROR = 4
+};
+
+std::string to_upper(std::string s) {
+  for (char& c : s) {
+    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+  }
+  return s;
+}
+
+LogLevel parse_log_level() {
   const char* level = std::getenv("TRACKER_LOG_LEVEL");
-  if (!level) return false;
-  return std::string(level) == "debug";
+  if (!level || !*level) return LogLevel::INFO;
+  const std::string v = to_upper(level);
+  if (v == "TRACE") return LogLevel::TRACE;
+  if (v == "DEBUG") return LogLevel::DEBUG;
+  if (v == "INFO")  return LogLevel::INFO;
+  if (v == "WARN")  return LogLevel::WARN;
+  if (v == "ERROR") return LogLevel::ERROR;
+  return LogLevel::INFO;
+}
+
+LogLevel current_log_level() {
+  static LogLevel level = parse_log_level();
+  return level;
+}
+
+bool should_log(LogLevel level) {
+  return static_cast<int>(level) >= static_cast<int>(current_log_level());
 }
 
 /**
@@ -202,7 +231,6 @@ CliArgs parse_cli(int argc, char** argv) {
   cli.d_th_m_cli        = arg_double(argc, argv, "--dth-m", 0.0);
   cli.t_max_s_cli       = arg_double(argc, argv, "--tmax-s", 0.0);
   cli.output_dir        = arg_value(argc, argv, "--output-dir", "./logs");
-  cli.verbose           = has_flag(argc, argv, "--verbose");
   cli.tracks_cli        = arg_size_t(argc, argv, "--tracks", 0);
   cli.warm_commit_every_scans = arg_size_t(argc, argv, "--warm-commit-every", 0);
   return cli;
@@ -258,12 +286,12 @@ std::string format_tm(const std::tm& tm, const char* fmt) {
  */
 std::string resolve_targets_xml(const std::string& cli_value,
                                 const cfg::ResolvedPaths& paths,
-                                bool verbose) {
+                                LogLevel log_level) {
   std::string targets_xml = !cli_value.empty() ? cli_value : paths.targets_xml;
   if (!file_exists(targets_xml)) {
     const std::string fallback = "./config/targets/targets_gen_1m_ca9.xml";
     if (file_exists(fallback)) {
-      if (verbose) {
+      if (log_level <= LogLevel::WARN && should_log(LogLevel::WARN)) {
         std::cerr << "WARNING: targets_xml not found ('" << targets_xml
                   << "'), falling back to '" << fallback << "'.\n";
       }
@@ -508,36 +536,42 @@ bool setup_scan_context(PipelineState& state) {
       nullptr);
     const auto init_t1 = std::chrono::high_resolution_clock::now();
     const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
-    std::cout << "  warm_init_s=" << init_s << "\n";
+    if (should_log(LogLevel::INFO)) {
+      std::cout << "  warm_init_s=" << init_s << "\n";
+    }
     state.scan.track_db->ResetTimingStats();
 
     // Stage 1: warm prefetch to define hot working set for the scan volume.
     state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
-    std::cout << "  hot_prefetch_n=" << state.scan.hot_ids.size() << "\n";
+    if (should_log(LogLevel::INFO)) {
+      std::cout << "  hot_prefetch_n=" << state.scan.hot_ids.size() << "\n";
+    }
   }
 
-  std::cout << "Scan-driven coarse query (loop):\n";
-  std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
-            << " inflate_m=" << state.scan.scan_inflate_m << "\n";
-  std::cout << "  aabb.min=(" << state.scan.scan_aabb.min_x << "," << state.scan.scan_aabb.min_y
-            << "," << state.scan.scan_aabb.min_z << ")\n";
-  std::cout << "  aabb.max=(" << state.scan.scan_aabb.max_x << "," << state.scan.scan_aabb.max_y
-            << "," << state.scan.scan_aabb.max_z << ")\n";
-  std::cout << "  run_s=" << state.scan.mcfg.T_run_s << " dt_s=" << state.scan.mcfg.dt_s
-            << " scan_hz=" << state.scan.mcfg.scan_rate_hz << "\n";
-  std::cout << "  index.backend=" << state.scan.icfg.backend
-            << " supports_incremental="
-            << (state.scan.track_db->SupportsIncrementalUpdates() ? "yes" : "no") << "\n";
-  if (state.scan.icfg.backend == "uniform_grid") {
-    std::cout << "  grid.cell_m=" << state.scan.icfg.grid_cell_m
-              << " d_th_m=" << state.scan.d_th_m
-              << " t_max_s=" << state.scan.t_max_s
-              << " dense_cell_probe_limit=" << store.index.dense_cell_probe_limit
-              << "\n";
-  } else {
-    std::cout << "  d_th_m=" << state.scan.d_th_m
-              << " t_max_s=" << state.scan.t_max_s
-              << " (used by update manager; backend may rebuild)\n";
+  if (should_log(LogLevel::INFO)) {
+    std::cout << "Scan-driven coarse query (loop):\n";
+    std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
+              << " inflate_m=" << state.scan.scan_inflate_m << "\n";
+    std::cout << "  aabb.min=(" << state.scan.scan_aabb.min_x << "," << state.scan.scan_aabb.min_y
+              << "," << state.scan.scan_aabb.min_z << ")\n";
+    std::cout << "  aabb.max=(" << state.scan.scan_aabb.max_x << "," << state.scan.scan_aabb.max_y
+              << "," << state.scan.scan_aabb.max_z << ")\n";
+    std::cout << "  run_s=" << state.scan.mcfg.T_run_s << " dt_s=" << state.scan.mcfg.dt_s
+              << " scan_hz=" << state.scan.mcfg.scan_rate_hz << "\n";
+    std::cout << "  index.backend=" << state.scan.icfg.backend
+              << " supports_incremental="
+              << (state.scan.track_db->SupportsIncrementalUpdates() ? "yes" : "no") << "\n";
+    if (state.scan.icfg.backend == "uniform_grid") {
+      std::cout << "  grid.cell_m=" << state.scan.icfg.grid_cell_m
+                << " d_th_m=" << state.scan.d_th_m
+                << " t_max_s=" << state.scan.t_max_s
+                << " dense_cell_probe_limit=" << store.index.dense_cell_probe_limit
+                << "\n";
+    } else {
+      std::cout << "  d_th_m=" << state.scan.d_th_m
+                << " t_max_s=" << state.scan.t_max_s
+                << " (used by update manager; backend may rebuild)\n";
+    }
   }
 
   return true;
@@ -654,14 +688,15 @@ void process_scan_tick(PipelineState& state,
               << "\n";
   }
 
-  if (state.cli.verbose && (state.stats.k_acc % 5 == 0)) {
+  if (should_log(LogLevel::INFO) && (state.stats.k_acc % 5 == 0)) {
     std::cout << "  avg_update_s=" << (state.stats.update_acc / state.stats.k_acc)
               << " avg_query_s="  << (state.stats.query_acc / state.stats.k_acc)
               << " avg_n_updated=" << (state.stats.nupd_acc / state.stats.k_acc)
               << "\n";
   }
 
-  if (state.cli.verbose && (state.stats.scan_count <= 3 || (state.stats.scan_count % 10 == 0))) {
+  if (should_log(LogLevel::INFO) &&
+      (state.stats.scan_count <= 3 || (state.stats.scan_count % 10 == 0))) {
     std::cout << "  scan=" << state.stats.scan_count
               << " t_s=" << t_s
               << " n_updated=" << state.scan.track_db->NumUpdatedLastUpdate()
@@ -674,7 +709,7 @@ void process_scan_tick(PipelineState& state,
  */
 void write_csvs(const PipelineState& state) {
   if (!ensure_output_dir(state.cli.output_dir)) {
-    if (state.cli.verbose) {
+    if (should_log(LogLevel::WARN)) {
       std::cerr << "WARNING: failed to create output directory '" << state.cli.output_dir << "'.\n";
     }
     return;
@@ -688,7 +723,7 @@ void write_csvs(const PipelineState& state) {
   const std::string date_folder = format_tm(run_tm, "%Y%m%d");
   const fs::path archive_dir = fs::path(state.cli.output_dir) / "archive" / date_folder;
   if (!ensure_output_dir(archive_dir.string())) {
-    if (state.cli.verbose) {
+    if (should_log(LogLevel::WARN)) {
       std::cerr << "WARNING: failed to create archive directory '" << archive_dir.string() << "'.\n";
     }
     return;
@@ -698,7 +733,7 @@ void write_csvs(const PipelineState& state) {
     (archive_dir / ("performance_" + format_tm(run_tm, "%Y%m%d_%H%M%S") + ".csv")).string();
   std::ofstream out(csv_path, std::ios::trunc);
   if (!out) {
-    if (state.cli.verbose) {
+    if (should_log(LogLevel::WARN)) {
       std::cerr << "WARNING: failed to open performance CSV at '" << csv_path << "'.\n";
     }
     return;
@@ -810,7 +845,7 @@ void write_csvs(const PipelineState& state) {
       write_header(append_out);
     }
     write_row(append_out);
-  } else if (state.cli.verbose) {
+  } else if (should_log(LogLevel::WARN)) {
     std::cerr << "WARNING: failed to open performance CSV at '" << append_path.string() << "'.\n";
   }
 }
@@ -829,13 +864,13 @@ int main(int argc, char** argv) try {
   PipelineState state;
   state.cfg = &cfg;
   state.cli = cli;
-  state.debug_timing = is_debug_timing_enabled();
+  state.debug_timing = should_log(LogLevel::DEBUG);
 
   // Resolve targets generator XML:
   //  1) CLI override if provided
   //  2) scenario targets from system.xml -> scenario catalog if present
   //  3) fallback hard-coded path ONLY if missing/unloadable
-  state.targets_xml = resolve_targets_xml(state.cli.targets_xml_cli, cfg.paths, state.cli.verbose);
+  state.targets_xml = resolve_targets_xml(state.cli.targets_xml_cli, cfg.paths, current_log_level());
 
   state.n = cfg.tracker_model.state.dim;
   if (state.n != trk::TrackBatch::kDim) {
