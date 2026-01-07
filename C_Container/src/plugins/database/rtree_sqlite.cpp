@@ -311,4 +311,50 @@ std::vector<std::uint64_t> SqliteRTreeIndex::QueryAabb(const EcefAabb& aabb) con
 
 std::size_t SqliteRTreeIndex::size() const { return p_ ? p_->count : 0; }
 
+void SqliteRTreeIndex::EnsureMetaTable() {
+  if (!p_ || !p_->db) throw std::runtime_error("EnsureMetaTable called before Reset");
+  exec_or_throw(p_->db,
+                "CREATE TABLE IF NOT EXISTS tracker_meta("
+                "key TEXT PRIMARY KEY, value TEXT"
+                ");");
+}
+
+std::string SqliteRTreeIndex::GetMeta(const std::string& key) const {
+  if (!p_ || !p_->db) throw std::runtime_error("GetMeta called before Reset");
+  const char* sql = "SELECT value FROM tracker_meta WHERE key = ?1;";
+  sqlite3_stmt* stmt = nullptr;
+  if (sqlite3_prepare_v2(p_->db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_prepare_v2 meta select failed");
+  }
+  sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  std::string value;
+  const int rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    const unsigned char* txt = sqlite3_column_text(stmt, 0);
+    if (txt) value = reinterpret_cast<const char*>(txt);
+  } else if (rc != SQLITE_DONE) {
+    sqlite3_finalize(stmt);
+    throw std::runtime_error("sqlite3_step(meta select) failed");
+  }
+  sqlite3_finalize(stmt);
+  return value;
+}
+
+void SqliteRTreeIndex::SetMeta(const std::string& key, const std::string& value) {
+  if (!p_ || !p_->db) throw std::runtime_error("SetMeta called before Reset");
+  const char* sql = "INSERT OR REPLACE INTO tracker_meta(key,value) VALUES(?1,?2);";
+  sqlite3_stmt* stmt = nullptr;
+  if (sqlite3_prepare_v2(p_->db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+    throw std::runtime_error("sqlite3_prepare_v2 meta upsert failed");
+  }
+  sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 2, value.c_str(), -1, SQLITE_TRANSIENT);
+  const int rc = sqlite3_step(stmt);
+  if (rc != SQLITE_DONE) {
+    sqlite3_finalize(stmt);
+    throw std::runtime_error("sqlite3_step(meta upsert) failed");
+  }
+  sqlite3_finalize(stmt);
+}
+
 }  // namespace idx

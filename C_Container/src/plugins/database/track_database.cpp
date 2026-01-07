@@ -87,6 +87,8 @@ public:
   TrackDbTimingStats GetTimingStats() const override { return stats_; }
   void ResetTimingStats() override { stats_ = TrackDbTimingStats{}; }
   void FlushWarmUpdates() override {}
+  bool WarmSignatureMatches(const std::string& /*signature*/) const override { return false; }
+  void StoreWarmSignature(const std::string& /*signature*/) override {}
 
   void ApplyDenseCellProbeLimit() {
     if (cfg_.backend == "uniform_grid") {
@@ -273,6 +275,19 @@ public:
     cv_.notify_all();
     std::unique_lock<std::mutex> lock(flush_mu_);
     flush_cv_.wait(lock, [&]() { return flush_completed_id_ >= req_id; });
+  }
+  bool WarmSignatureMatches(const std::string& signature) const override {
+    auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_read_.get());
+    if (!sqlite) return false;
+    sqlite->EnsureMetaTable();
+    const std::string v = sqlite->GetMeta("signature");
+    return !v.empty() && v == signature;
+  }
+  void StoreWarmSignature(const std::string& signature) override {
+    auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_write_.get());
+    if (!sqlite) return;
+    sqlite->EnsureMetaTable();
+    sqlite->SetMeta("signature", signature);
   }
 
 private:

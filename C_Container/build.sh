@@ -12,9 +12,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
 GENERATOR=""
 CXX_STANDARD="17"
-BUILD_TYPE="Release"
+BUILD_TYPE="Debug"
 ENABLE_OPENMP="ON"
-ENABLE_LTO="ON"
+ENABLE_LTO="OFF"
 ENABLE_CONFIG="ON"
 BACKEND="${BACKEND:-auto}"
 USE_CCACHE="auto"
@@ -30,7 +30,7 @@ Options:
   --build-dir DIR                Build directory (default: ${BUILD_DIR})
   --generator NAME               CMake generator (default: auto-detect)
   --no-openmp                    Disable OpenMP (default: enabled)
-  --enable-lto / --disable-lto   Toggle IPO/LTO (default: enabled)
+  --enable-lto / --disable-lto   Toggle IPO/LTO (default: disabled)
   --enable-config / --disable-config  Toggle XML config loader (default: enabled)
   --build-type {Release|Debug|RelWithDebInfo|MinSizeRel} (default: ${BUILD_TYPE})
   --jobs N                       Parallel build jobs (default: ${JOBS})
@@ -59,14 +59,15 @@ EOF
 # Parse args
 # ---------------------------
 CLEAN=0
+LTO_FLAG_SET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --build-dir) BUILD_DIR="${2:-}"; shift 2 ;;
     --generator) GENERATOR="${2:-}"; shift 2 ;;
     --no-openmp) ENABLE_OPENMP="OFF"; shift ;;
-    --enable-lto) ENABLE_LTO="ON"; shift ;;
-    --disable-lto) ENABLE_LTO="OFF"; shift ;;
+    --enable-lto) ENABLE_LTO="ON"; LTO_FLAG_SET=1; shift ;;
+    --disable-lto) ENABLE_LTO="OFF"; LTO_FLAG_SET=1; shift ;;
     --enable-config) ENABLE_CONFIG="ON"; shift ;;
     --disable-config) ENABLE_CONFIG="OFF"; shift ;;
     --build-type) BUILD_TYPE="${2:-}"; shift 2 ;;
@@ -79,6 +80,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
 done
+
+# If user asked for Release and did not explicitly set LTO, enable it.
+if [[ "${BUILD_TYPE,,}" == "release" && $LTO_FLAG_SET -eq 0 ]]; then
+  ENABLE_LTO="ON"
+fi
 
 # ---------------------------
 # Dependency checks (soft)

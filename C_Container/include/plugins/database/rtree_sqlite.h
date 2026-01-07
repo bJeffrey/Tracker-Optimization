@@ -61,6 +61,11 @@ public:
 
   std::size_t size() const;
 
+  // Metadata helpers for warm DB signature.
+  void EnsureMetaTable();
+  std::string GetMeta(const std::string& key) const;
+  void SetMeta(const std::string& key, const std::string& value);
+
 private:
   struct Impl;
   Impl* p_;

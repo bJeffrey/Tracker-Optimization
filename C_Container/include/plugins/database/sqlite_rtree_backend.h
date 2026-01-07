@@ -28,6 +28,10 @@ public:
   void Commit();
   void Rollback();
 
+  void EnsureMetaTable();
+  std::string GetMeta(const std::string& key) const;
+  void SetMeta(const std::string& key, const std::string& value);
+
 private:
   SqliteRTreeIndex rtree_;
   std::size_t reserved_ = 0;

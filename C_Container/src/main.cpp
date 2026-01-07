@@ -278,6 +278,39 @@ std::string format_tm(const std::tm& tm, const char* fmt) {
   return oss.str();
 }
 
+std::uint64_t fnv1a64(const std::string& s) {
+  const std::uint64_t kOffset = 1469598103934665603ull;
+  const std::uint64_t kPrime = 1099511628211ull;
+  std::uint64_t h = kOffset;
+  for (unsigned char c : s) {
+    h ^= static_cast<std::uint64_t>(c);
+    h *= kPrime;
+  }
+  return h;
+}
+
+std::string hex_u64(std::uint64_t v) {
+  std::ostringstream oss;
+  oss << std::hex << std::nouppercase << v;
+  return oss.str();
+}
+
+std::string build_warm_signature(const PipelineState& state) {
+  std::ostringstream oss;
+  oss << "version=" << TRACKER_VERSION_STRING << "\n";
+  oss << "system_xml=" << state.cli.system_xml << "\n";
+  oss << "targets_xml=" << state.targets_xml << "\n";
+  oss << "scenario_id=" << state.cfg->scenario.id << "\n";
+  oss << "targets_seed=" << state.cfg->targets_gen.seed << "\n";
+  oss << "targets_count=" << state.cfg->targets_gen.count << "\n";
+  oss << "state_dim=" << state.cfg->tracker_model.state.dim << "\n";
+  oss << "index_backend=" << state.cfg->store_profile.index.backend << "\n";
+  oss << "index_cell_m=" << state.cfg->store_profile.index.cell_m << "\n";
+  oss << "index_d_th_m=" << state.cfg->store_profile.index.d_th_m << "\n";
+  oss << "index_t_max_s=" << state.cfg->store_profile.index.t_max_s << "\n";
+  return hex_u64(fnv1a64(oss.str()));
+}
+
 // ------------------------------
 // Config + init helpers
 // ------------------------------
@@ -527,11 +560,16 @@ bool setup_scan_context(PipelineState& state) {
   if (store.mode == "HOT_PLUS_WARM") {
     const std::string& db_uri = store.sqlite.db_uri;
     bool reuse_db = false;
+    const std::string signature = build_warm_signature(state);
     if (!db_uri.empty() && db_uri != ":memory:" &&
         state.cfg->scenario.refs.targets_use_prepopulated_db) {
       std::error_code ec;
       const std::uintmax_t sz = fs::file_size(fs::path(db_uri), ec);
       reuse_db = (!ec && sz > 0);
+    }
+
+    if (reuse_db) {
+      reuse_db = state.scan.track_db->WarmSignatureMatches(signature);
     }
 
     if (!reuse_db) {
@@ -549,9 +587,10 @@ bool setup_scan_context(PipelineState& state) {
       if (should_log(LogLevel::INFO)) {
         std::cout << "  warm_init_s=" << init_s << "\n";
       }
+      state.scan.track_db->StoreWarmSignature(signature);
       state.scan.track_db->ResetTimingStats();
     } else if (should_log(LogLevel::INFO)) {
-      std::cout << "  warm_init_s=skipped (using prepopulated DB)\n";
+      std::cout << "  warm_init_s=skipped (signature match)\n";
     }
 
     // Stage 1: warm prefetch to define hot working set for the scan volume.

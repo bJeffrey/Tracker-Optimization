@@ -39,4 +39,16 @@ void SqliteRTreeIndexBackend::Rollback() {
   rtree_.Rollback();
 }
 
+void SqliteRTreeIndexBackend::EnsureMetaTable() {
+  rtree_.EnsureMetaTable();
+}
+
+std::string SqliteRTreeIndexBackend::GetMeta(const std::string& key) const {
+  return rtree_.GetMeta(key);
+}
+
+void SqliteRTreeIndexBackend::SetMeta(const std::string& key, const std::string& value) {
+  rtree_.SetMeta(key, value);
+}
+
 } // namespace idx

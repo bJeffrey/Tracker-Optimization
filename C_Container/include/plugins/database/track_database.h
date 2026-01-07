@@ -74,6 +74,10 @@ public:
 
   // Flush any pending warm updates and wait for completion (hot+warm only).
   virtual void FlushWarmUpdates() = 0;
+
+  // Warm DB signature support (hot+warm only).
+  virtual bool WarmSignatureMatches(const std::string& signature) const = 0;
+  virtual void StoreWarmSignature(const std::string& signature) = 0;
 };
 
 std::unique_ptr<ITrackDatabase> CreateTrackDatabase(const TrackDatabaseConfig& cfg);
