@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 namespace db {
 namespace {
@@ -83,6 +86,7 @@ public:
 
   TrackDbTimingStats GetTimingStats() const override { return stats_; }
   void ResetTimingStats() override { stats_ = TrackDbTimingStats{}; }
+  void FlushWarmUpdates() override {}
 
   void ApplyDenseCellProbeLimit() {
     if (cfg_.backend == "uniform_grid") {
@@ -104,16 +108,19 @@ public:
   explicit HotWarmTrackDatabase(const TrackDatabaseConfig& cfg)
       : cfg_(cfg),
         hot_(cfg),
-        warm_index_(std::make_unique<idx::SqliteRTreeIndexBackend>(cfg_.sqlite_db_uri)) {}
+        warm_index_read_(std::make_unique<idx::SqliteRTreeIndexBackend>(cfg_.sqlite_db_uri)),
+        warm_index_write_(std::make_unique<idx::SqliteRTreeIndexBackend>(cfg_.sqlite_db_uri)) {
+    worker_ = std::thread(&HotWarmTrackDatabase::WorkerLoop, this);
+  }
   ~HotWarmTrackDatabase() override {
-    if (in_transaction_) {
-      if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_.get())) {
-        try {
-          sqlite->Commit();
-        } catch (...) {
-          try { sqlite->Rollback(); } catch (...) {}
-        }
-      }
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      stop_ = true;
+      flush_requested_ = true;
+    }
+    cv_.notify_all();
+    if (worker_.joinable()) {
+      worker_.join();
     }
   }
 
@@ -121,7 +128,8 @@ public:
     n_tracks_ = n_tracks;
     hot_mask_.assign(n_tracks_, 0);
     hot_.Reserve(n_tracks);
-    warm_index_->Reserve(n_tracks);
+    warm_index_read_->Reserve(n_tracks);
+    warm_index_write_->Reserve(n_tracks);
     warm_updater_.Reset(n_tracks);
   }
 
@@ -151,77 +159,53 @@ public:
                     const trk::IdList* ids) override {
     (void)n_tracks;
     // TODO: warm-store prefetch/merge goes here.
-    if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_.get())) {
-      const bool need_begin = !in_transaction_;
-      std::chrono::high_resolution_clock::time_point t0;
-      std::chrono::high_resolution_clock::time_point t1;
-      if (need_begin) {
-        t0 = std::chrono::high_resolution_clock::now();
+    if (!ids) {
+      // Warm init: do synchronous rebuild so reader sees data immediately.
+      if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_write_.get())) {
+        const auto t0 = std::chrono::high_resolution_clock::now();
         sqlite->Begin();
-        t1 = std::chrono::high_resolution_clock::now();
-      }
-      try {
-        const auto t_apply0 = std::chrono::high_resolution_clock::now();
-        if (ids && !ids->empty()) {
-          warm_updater_.ApplySubsetThreshold(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
-        } else {
-          warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
-        }
-        const auto t_apply1 = std::chrono::high_resolution_clock::now();
-        stats_.last_finalize_begin_s = need_begin ? std::chrono::duration<double>(t1 - t0).count() : 0.0;
-        stats_.last_finalize_apply_s = std::chrono::duration<double>(t_apply1 - t_apply0).count();
+        warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_write_);
+        sqlite->Commit();
+        const auto t1 = std::chrono::high_resolution_clock::now();
+        const double dt = std::chrono::duration<double>(t1 - t0).count();
+        std::lock_guard<std::mutex> lock(stats_mu_);
+        stats_.last_finalize_begin_s = 0.0;
+        stats_.last_finalize_apply_s = dt;
         stats_.last_finalize_commit_s = 0.0;
-
-        if (need_begin) {
-          stats_.finalize_begin_acc_s += stats_.last_finalize_begin_s;
-          ++stats_.finalize_begin_calls;
-        }
-        stats_.finalize_apply_acc_s += stats_.last_finalize_apply_s;
+        stats_.finalize_apply_acc_s += dt;
         ++stats_.finalize_calls;
-
-        if (cfg_.warm_commit_every_scans > 1) {
-          in_transaction_ = true;
-          ++pending_scans_;
-        } else {
-          pending_scans_ = 1;
-        }
-
-        if (cfg_.warm_commit_every_scans <= 1 ||
-            pending_scans_ >= cfg_.warm_commit_every_scans) {
-          const auto t_commit0 = std::chrono::high_resolution_clock::now();
-          sqlite->Commit();
-          const auto t_commit1 = std::chrono::high_resolution_clock::now();
-          stats_.last_finalize_commit_s = std::chrono::duration<double>(t_commit1 - t_commit0).count();
-          stats_.finalize_commit_acc_s += stats_.last_finalize_commit_s;
-          ++stats_.finalize_commit_calls;
-          pending_scans_ = 0;
-          in_transaction_ = false;
-        }
-      } catch (...) {
-        sqlite->Rollback();
-        in_transaction_ = false;
-        pending_scans_ = 0;
-        throw;
       }
-    } else {
-      const auto t1 = std::chrono::high_resolution_clock::now();
-      if (ids && !ids->empty()) {
-        warm_updater_.ApplySubsetThreshold(t_now_s, xs, ys, zs, ids->data(), ids->size(), *warm_index_);
-      } else {
-        warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_);
-      }
-      const auto t2 = std::chrono::high_resolution_clock::now();
-      stats_.last_finalize_begin_s = 0.0;
-      stats_.last_finalize_apply_s = std::chrono::duration<double>(t2 - t1).count();
-      stats_.last_finalize_commit_s = 0.0;
-      stats_.finalize_apply_acc_s += stats_.last_finalize_apply_s;
-      ++stats_.finalize_calls;
+      return;
     }
+
+    if (!ids->empty()) {
+      std::vector<std::uint64_t> upd_ids;
+      std::vector<double> upd_xs;
+      std::vector<double> upd_ys;
+      std::vector<double> upd_zs;
+      warm_updater_.CollectSubsetThreshold(t_now_s, xs, ys, zs, ids->data(), ids->size(),
+                                           upd_ids, upd_xs, upd_ys, upd_zs);
+      if (upd_ids.empty()) return;
+
+      std::lock_guard<std::mutex> lock(mu_);
+      pending_ids_.insert(pending_ids_.end(), upd_ids.begin(), upd_ids.end());
+      pending_xs_.insert(pending_xs_.end(), upd_xs.begin(), upd_xs.end());
+      pending_ys_.insert(pending_ys_.end(), upd_ys.begin(), upd_ys.end());
+      pending_zs_.insert(pending_zs_.end(), upd_zs.begin(), upd_zs.end());
+      ++pending_scans_;
+      pending_tracks_ += upd_ids.size();
+
+      if ((pending_scans_ >= cfg_.warm_commit_every_scans) ||
+          (pending_tracks_ >= cfg_.warm_commit_after_tracks)) {
+        flush_requested_ = true;
+      }
+    }
+    cv_.notify_all();
   }
 
   trk::IdList QueryAabb(const idx::EcefAabb& aabb) const override {
     if (hot_ids_.empty()) {
-      return warm_index_->QueryAabb(aabb);
+      return warm_index_read_->QueryAabb(aabb);
     }
 
     auto ids = hot_.QueryAabb(aabb);
@@ -245,11 +229,14 @@ public:
     }
 
     const auto t0 = std::chrono::high_resolution_clock::now();
-    hot_ids_ = warm_index_->QueryAabb(aabb);
+    hot_ids_ = warm_index_read_->QueryAabb(aabb);
     const auto t1 = std::chrono::high_resolution_clock::now();
-    stats_.last_prefetch_s = std::chrono::duration<double>(t1 - t0).count();
-    stats_.prefetch_acc_s += stats_.last_prefetch_s;
-    ++stats_.prefetch_calls;
+    {
+      std::lock_guard<std::mutex> lock(stats_mu_);
+      stats_.last_prefetch_s = std::chrono::duration<double>(t1 - t0).count();
+      stats_.prefetch_acc_s += stats_.last_prefetch_s;
+      ++stats_.prefetch_calls;
+    }
     for (std::uint64_t id : hot_ids_) {
       if (id < hot_mask_.size()) hot_mask_[static_cast<std::size_t>(id)] = 1;
     }
@@ -265,20 +252,129 @@ public:
     return hot_.SupportsIncrementalUpdates();
   }
 
-  TrackDbTimingStats GetTimingStats() const override { return stats_; }
-  void ResetTimingStats() override { stats_ = TrackDbTimingStats{}; }
+  TrackDbTimingStats GetTimingStats() const override {
+    std::lock_guard<std::mutex> lock(stats_mu_);
+    return stats_;
+  }
+  void ResetTimingStats() override {
+    std::lock_guard<std::mutex> lock(stats_mu_);
+    stats_ = TrackDbTimingStats{};
+  }
+  void FlushWarmUpdates() override {
+    std::size_t req_id = 0;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      flush_requested_ = true;
+    }
+    {
+      std::lock_guard<std::mutex> lock(flush_mu_);
+      req_id = ++flush_request_id_;
+    }
+    cv_.notify_all();
+    std::unique_lock<std::mutex> lock(flush_mu_);
+    flush_cv_.wait(lock, [&]() { return flush_completed_id_ >= req_id; });
+  }
 
 private:
+  void WorkerLoop() {
+    while (true) {
+      std::vector<std::uint64_t> ids;
+      std::vector<double> xs, ys, zs;
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [&]() {
+          return stop_ || flush_requested_ || !pending_ids_.empty();
+        });
+        if (stop_ && pending_ids_.empty()) {
+          break;
+        }
+        if (!pending_ids_.empty() &&
+            (flush_requested_ || stop_ ||
+             pending_scans_ >= cfg_.warm_commit_every_scans ||
+             pending_tracks_ >= cfg_.warm_commit_after_tracks)) {
+          ids.swap(pending_ids_);
+          xs.swap(pending_xs_);
+          ys.swap(pending_ys_);
+          zs.swap(pending_zs_);
+          pending_scans_ = 0;
+          pending_tracks_ = 0;
+          flush_requested_ = false;
+        } else if (flush_requested_ && pending_ids_.empty()) {
+          flush_requested_ = false;
+          std::lock_guard<std::mutex> lock_flush(flush_mu_);
+          flush_completed_id_ = flush_request_id_;
+          flush_cv_.notify_all();
+          continue;
+        } else {
+          continue;
+        }
+      }
+
+      if (ids.empty()) {
+        if (stop_) break;
+        continue;
+      }
+
+      if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_write_.get())) {
+        const auto t_begin0 = std::chrono::high_resolution_clock::now();
+        sqlite->Begin();
+        const auto t_begin1 = std::chrono::high_resolution_clock::now();
+
+        const auto t_apply0 = std::chrono::high_resolution_clock::now();
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+          warm_index_write_->UpdatePoint(ids[i], xs[i], ys[i], zs[i]);
+        }
+        const auto t_apply1 = std::chrono::high_resolution_clock::now();
+
+        const auto t_commit0 = std::chrono::high_resolution_clock::now();
+        sqlite->Commit();
+        const auto t_commit1 = std::chrono::high_resolution_clock::now();
+
+        std::lock_guard<std::mutex> lock(stats_mu_);
+        stats_.last_finalize_begin_s = std::chrono::duration<double>(t_begin1 - t_begin0).count();
+        stats_.last_finalize_apply_s = std::chrono::duration<double>(t_apply1 - t_apply0).count();
+        stats_.last_finalize_commit_s = std::chrono::duration<double>(t_commit1 - t_commit0).count();
+        stats_.finalize_begin_acc_s += stats_.last_finalize_begin_s;
+        stats_.finalize_apply_acc_s += stats_.last_finalize_apply_s;
+        stats_.finalize_commit_acc_s += stats_.last_finalize_commit_s;
+        ++stats_.finalize_begin_calls;
+        ++stats_.finalize_commit_calls;
+        ++stats_.finalize_calls;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock_flush(flush_mu_);
+        flush_completed_id_ = flush_request_id_;
+      }
+      flush_cv_.notify_all();
+    }
+  }
+
   TrackDatabaseConfig cfg_;
   HotOnlyTrackDatabase hot_;
-  std::unique_ptr<idx::ISpatialIndex3D> warm_index_;
+  std::unique_ptr<idx::ISpatialIndex3D> warm_index_read_;
+  std::unique_ptr<idx::ISpatialIndex3D> warm_index_write_;
   idx::IndexUpdateManager warm_updater_;
   trk::IdList hot_ids_;
   std::vector<std::uint8_t> hot_mask_;
   std::size_t n_tracks_ = 0;
   TrackDbTimingStats stats_{};
-  bool in_transaction_ = false;
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool stop_ = false;
+  bool flush_requested_ = false;
   std::size_t pending_scans_ = 0;
+  std::size_t pending_tracks_ = 0;
+  std::vector<std::uint64_t> pending_ids_;
+  std::vector<double> pending_xs_;
+  std::vector<double> pending_ys_;
+  std::vector<double> pending_zs_;
+  std::thread worker_;
+  mutable std::mutex stats_mu_;
+  std::mutex flush_mu_;
+  std::condition_variable flush_cv_;
+  std::size_t flush_request_id_ = 0;
+  std::size_t flush_completed_id_ = 0;
 };
 
 } // namespace

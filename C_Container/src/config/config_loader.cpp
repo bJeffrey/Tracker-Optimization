@@ -332,6 +332,22 @@ static StoreCfg parse_store(void* doc) {
       p.index.dense_cell_probe_limit = static_cast<std::uint64_t>(dense);
     }
 
+    const int commit_scans = xmlu::NodeGetIntChild(
+      n,
+      "WarmCommitEveryScans",
+      static_cast<int>(p.warm_commit_every_scans));
+    if (commit_scans > 0) {
+      p.warm_commit_every_scans = static_cast<std::size_t>(commit_scans);
+    }
+
+    const int commit_tracks = xmlu::NodeGetIntChild(
+      n,
+      "WarmCommitAfterTracks",
+      static_cast<int>(p.warm_commit_after_tracks));
+    if (commit_tracks > 0) {
+      p.warm_commit_after_tracks = static_cast<std::size_t>(commit_tracks);
+    }
+
     // Sqlite child (optional)
     auto node_name_eq = [](xmlNodePtr node, const char* name) -> bool {
       return node && node->type == XML_ELEMENT_NODE && node->name &&

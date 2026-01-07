@@ -9,6 +9,7 @@
  *  - Backend (eigen/std/mkl) is compile-time (container) and is NOT a config option.
  */
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -210,6 +211,8 @@ struct StoreProfile {
   SqliteCfg sqlite{};   // optional depending on backend
   RTreeCfg rtree{};     // optional depending on backend
   SpatialIndexCfg index{};
+  std::size_t warm_commit_every_scans = 1;
+  std::size_t warm_commit_after_tracks = 1000;
 };
 
 struct StoreCfg {

@@ -71,7 +71,7 @@ struct CliArgs {
   std::string output_dir;
   bool verbose = false;
   std::size_t tracks_cli = 0;
-  std::size_t warm_commit_every_scans = 1;
+  std::size_t warm_commit_every_scans = 0;
 };
 
 // ------------------------------
@@ -204,7 +204,7 @@ CliArgs parse_cli(int argc, char** argv) {
   cli.output_dir        = arg_value(argc, argv, "--output-dir", "./logs");
   cli.verbose           = has_flag(argc, argv, "--verbose");
   cli.tracks_cli        = arg_size_t(argc, argv, "--tracks", 0);
-  cli.warm_commit_every_scans = arg_size_t(argc, argv, "--warm-commit-every", 1);
+  cli.warm_commit_every_scans = arg_size_t(argc, argv, "--warm-commit-every", 0);
   return cli;
 }
 
@@ -485,7 +485,13 @@ bool setup_scan_context(PipelineState& state) {
   db_cfg.dense_cell_probe_limit = store.index.dense_cell_probe_limit;
   db_cfg.d_th_m = state.scan.d_th_m;
   db_cfg.t_max_s = state.scan.t_max_s;
-  db_cfg.warm_commit_every_scans = std::max<std::size_t>(1, state.cli.warm_commit_every_scans);
+  const std::size_t commit_scans =
+    (state.cli.warm_commit_every_scans > 0)
+      ? state.cli.warm_commit_every_scans
+      : state.cfg->store_profile.warm_commit_every_scans;
+  db_cfg.warm_commit_every_scans = std::max<std::size_t>(1, commit_scans);
+  db_cfg.warm_commit_after_tracks =
+    std::max<std::size_t>(1, state.cfg->store_profile.warm_commit_after_tracks);
 
   state.scan.track_db = db::CreateTrackDatabase(db_cfg);
   state.scan.track_db->Reserve(state.scan.tbm.n);
@@ -732,6 +738,10 @@ void write_csvs(const PipelineState& state) {
   auto write_row = [&](std::ostream& os) {
     const double loop_per_scan =
       (state.stats.scan_count > 0 ? (state.stats.loop_s / static_cast<double>(state.stats.scan_count)) : 0.0);
+    const std::size_t warm_commit_scans =
+      (state.cli.warm_commit_every_scans > 0)
+        ? state.cli.warm_commit_every_scans
+        : state.cfg->store_profile.warm_commit_every_scans;
     os
       << date_str << ','
       << time_str << ','
@@ -752,7 +762,7 @@ void write_csvs(const PipelineState& state) {
       << avg_n_updated << ','
       << state.stats.finalize_acc_s << ','
       << avg_finalize_s << ','
-      << state.cli.warm_commit_every_scans << ','
+      << warm_commit_scans << ','
       << db_stats.finalize_begin_acc_s << ','
       << avg_finalize_begin_s << ','
       << db_stats.finalize_apply_acc_s << ','
@@ -775,7 +785,7 @@ void write_csvs(const PipelineState& state) {
   const fs::path append_path = fs::path(state.cli.output_dir) / "performance.csv";
   std::error_code ec;
   bool has_header = false;
-  bool header_has_new_cols = false;
+  bool header_matches = false;
   if (fs::exists(append_path, ec) && !ec) {
     const auto sz = fs::file_size(append_path, ec);
     has_header = (!ec && sz > 0);
@@ -783,16 +793,20 @@ void write_csvs(const PipelineState& state) {
       std::ifstream in(append_path);
       std::string line;
       if (in && std::getline(in, line)) {
-        header_has_new_cols =
-          (line.find("finalize_begin_total_s") != std::string::npos) &&
-          (line.find("warm_commit_every_scans") != std::string::npos);
+        std::ostringstream expected;
+        write_header(expected);
+        std::string expected_line = expected.str();
+        if (!expected_line.empty() && expected_line.back() == '\n') {
+          expected_line.pop_back();
+        }
+        header_matches = (line == expected_line);
       }
     }
   }
   std::ofstream append_out(append_path, std::ios::app);
   if (append_out) {
     // Write header only when the rolling file is created.
-    if (!has_header || !header_has_new_cols) {
+    if (!has_header || !header_matches) {
       write_header(append_out);
     }
     write_row(append_out);
@@ -903,8 +917,12 @@ int main(int argc, char** argv) try {
     std::cout << "Propagation skipped (--gen-only)\n";
   }
 
-  // Write performance metrics to CSV (single-row, time-stamped per run)
-  write_csvs(state);
+    // Flush any async warm commits before writing CSV so commit timings are included.
+    if (state.scan.track_db) {
+      state.scan.track_db->FlushWarmUpdates();
+    }
+    // Write performance metrics to CSV (single-row, time-stamped per run)
+    write_csvs(state);
 
   return 0;
 

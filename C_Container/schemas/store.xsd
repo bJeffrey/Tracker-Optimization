@@ -38,6 +38,8 @@
               <xs:element name="IndexMaxAgeSeconds" type="NonNegativeDouble" minOccurs="0"/>
               <xs:element name="IndexDenseCellProbeLimit" type="xs:unsignedLong" minOccurs="0"/>
               <xs:element name="QueryAabbInflateMeters" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="WarmCommitEveryScans" type="PositiveInt" minOccurs="0"/>
+              <xs:element name="WarmCommitAfterTracks" type="PositiveInt" minOccurs="0"/>
 
               <xs:element name="Sqlite" minOccurs="0">
                 <xs:complexType>

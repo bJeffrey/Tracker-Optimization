@@ -38,6 +38,15 @@ public:
                             const std::uint64_t* ids, std::size_t n_ids,
                             ISpatialIndex3D& index);
 
+  // Collect updates based on thresholds without touching the index.
+  void CollectSubsetThreshold(double t_now_s,
+                              const double* xs, const double* ys, const double* zs,
+                              const std::uint64_t* ids, std::size_t n_ids,
+                              std::vector<std::uint64_t>& out_ids,
+                              std::vector<double>& out_xs,
+                              std::vector<double>& out_ys,
+                              std::vector<double>& out_zs);
+
   std::size_t NumUpdatedLastApply() const { return n_updated_last_; }
 
 private:

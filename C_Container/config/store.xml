@@ -16,6 +16,8 @@
     <IndexMaxAgeSeconds>1.0</IndexMaxAgeSeconds>
     <IndexDenseCellProbeLimit>200000</IndexDenseCellProbeLimit>
     <QueryAabbInflateMeters>2000</QueryAabbInflateMeters>
+    <WarmCommitEveryScans>1</WarmCommitEveryScans>
+    <WarmCommitAfterTracks>1000</WarmCommitAfterTracks>
 
     <Sqlite>
       <!-- Entire DB in RAM -->

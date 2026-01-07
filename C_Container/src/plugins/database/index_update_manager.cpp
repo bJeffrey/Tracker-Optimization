@@ -123,4 +123,42 @@ void IndexUpdateManager::ApplySubsetThreshold(double t_now_s,
   }
 }
 
+void IndexUpdateManager::CollectSubsetThreshold(double t_now_s,
+                                                const double* xs, const double* ys, const double* zs,
+                                                const std::uint64_t* ids, std::size_t n_ids,
+                                                std::vector<std::uint64_t>& out_ids,
+                                                std::vector<double>& out_xs,
+                                                std::vector<double>& out_ys,
+                                                std::vector<double>& out_zs) {
+  if (!xs || !ys || !zs || !ids) throw std::runtime_error("IndexUpdateManager::CollectSubsetThreshold: null pointers");
+  out_ids.clear();
+  out_xs.clear();
+  out_ys.clear();
+  out_zs.clear();
+  n_updated_last_ = 0;
+
+  for (std::size_t k = 0; k < n_ids; ++k) {
+    const std::size_t i = static_cast<std::size_t>(ids[k]);
+    const double dx = xs[i] - last_x_[i];
+    const double dy = ys[i] - last_y_[i];
+    const double dz = zs[i] - last_z_[i];
+
+    const double d2 = dx*dx + dy*dy + dz*dz;
+    const double age = t_now_s - last_t_[i];
+
+    const bool do_update = (d2 > d_th2_m2_) || (age >= t_max_s_);
+    if (do_update) {
+      out_ids.push_back(static_cast<std::uint64_t>(i));
+      out_xs.push_back(xs[i]);
+      out_ys.push_back(ys[i]);
+      out_zs.push_back(zs[i]);
+      last_x_[i] = xs[i];
+      last_y_[i] = ys[i];
+      last_z_[i] = zs[i];
+      last_t_[i] = t_now_s;
+      ++n_updated_last_;
+    }
+  }
+}
+
 } // namespace idx

@@ -19,6 +19,7 @@ struct TrackDatabaseConfig {
   double d_th_m = 500.0;
   double t_max_s = 1.0;
   std::size_t warm_commit_every_scans = 1;
+  std::size_t warm_commit_after_tracks = 1000;
 };
 
 struct TrackDbTimingStats {
@@ -70,6 +71,9 @@ public:
 
   virtual TrackDbTimingStats GetTimingStats() const = 0;
   virtual void ResetTimingStats() = 0;
+
+  // Flush any pending warm updates and wait for completion (hot+warm only).
+  virtual void FlushWarmUpdates() = 0;
 };
 
 std::unique_ptr<ITrackDatabase> CreateTrackDatabase(const TrackDatabaseConfig& cfg);
