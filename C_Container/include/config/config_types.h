@@ -250,6 +250,7 @@ struct ScenarioRefs {
   std::string ownship_href;
   std::string targets_source_type; // "generator", etc.
   std::string targets_href;
+  bool targets_use_prepopulated_db = false;
 };
 
 struct LoadPolicy {

@@ -38,6 +38,7 @@
                       <xs:complexType>
                         <xs:attribute name="sourceType" type="TargetsSourceType" use="required"/>
                         <xs:attribute name="href" type="NonEmptyString" use="required"/>
+                        <xs:attribute name="usePrepopulatedDb" type="BoolText" use="optional"/>
                       </xs:complexType>
                     </xs:element>
                   </xs:sequence>

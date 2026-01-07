@@ -525,21 +525,34 @@ bool setup_scan_context(PipelineState& state) {
   state.scan.track_db->Reserve(state.scan.tbm.n);
   state.scan.track_db->Configure(state.scan.d_th_m, state.scan.t_max_s);
   if (store.mode == "HOT_PLUS_WARM") {
-    // Initialize warm store before the scan loop so first-scan latency is not impacted.
-    const auto init_t0 = std::chrono::high_resolution_clock::now();
-    state.scan.track_db->FinalizeScan(
-      0.0,
-      state.scan.tbm.x_ptr(),
-      state.scan.tbm.y_ptr(),
-      state.scan.tbm.z_ptr(),
-      state.scan.tbm.n,
-      nullptr);
-    const auto init_t1 = std::chrono::high_resolution_clock::now();
-    const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
-    if (should_log(LogLevel::INFO)) {
-      std::cout << "  warm_init_s=" << init_s << "\n";
+    const std::string& db_uri = store.sqlite.db_uri;
+    bool reuse_db = false;
+    if (!db_uri.empty() && db_uri != ":memory:" &&
+        state.cfg->scenario.refs.targets_use_prepopulated_db) {
+      std::error_code ec;
+      const std::uintmax_t sz = fs::file_size(fs::path(db_uri), ec);
+      reuse_db = (!ec && sz > 0);
     }
-    state.scan.track_db->ResetTimingStats();
+
+    if (!reuse_db) {
+      // Initialize warm store before the scan loop so first-scan latency is not impacted.
+      const auto init_t0 = std::chrono::high_resolution_clock::now();
+      state.scan.track_db->FinalizeScan(
+        0.0,
+        state.scan.tbm.x_ptr(),
+        state.scan.tbm.y_ptr(),
+        state.scan.tbm.z_ptr(),
+        state.scan.tbm.n,
+        nullptr);
+      const auto init_t1 = std::chrono::high_resolution_clock::now();
+      const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
+      if (should_log(LogLevel::INFO)) {
+        std::cout << "  warm_init_s=" << init_s << "\n";
+      }
+      state.scan.track_db->ResetTimingStats();
+    } else if (should_log(LogLevel::INFO)) {
+      std::cout << "  warm_init_s=skipped (using prepopulated DB)\n";
+    }
 
     // Stage 1: warm prefetch to define hot working set for the scan volume.
     state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);

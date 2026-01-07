@@ -472,6 +472,11 @@ static ScenarioCatalog parse_scenario_catalog(void* doc_void) {
       if (xmlNodePtr tgt = find_child(refs, "Targets")) {
         s.refs.targets_source_type = get_attr(tgt, "sourceType");
         s.refs.targets_href        = get_attr(tgt, "href");
+        const std::string use_db   = get_attr(tgt, "usePrepopulatedDb");
+        if (!use_db.empty()) {
+          s.refs.targets_use_prepopulated_db =
+            (use_db == "true" || use_db == "1" || use_db == "TRUE");
+        }
       }
     }
 
