@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="common_types.xsd"/>
+
+  <xs:element name="GateSizing">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Planar">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="MaxTargetSpeedMps" type="NonNegativeDouble"/>
+              <xs:element name="VelocityBufferFraction" type="Fraction01"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <xs:element name="AltitudeBinning">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="MaxTargetAltitudeMeters" type="NonNegativeDouble"/>
+              <xs:element name="AltitudeBinMeters" type="NonNegativeDouble"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="NonEmptyString" use="optional"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

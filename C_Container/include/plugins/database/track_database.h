@@ -1,6 +1,7 @@
 #pragma once
 
 #include "plugins/database/spatial_index_3d.h"
+#include "common/track_batch.h"
 #include "tracker_types.h"
 
 #include <cstddef>
@@ -54,10 +55,7 @@ public:
 
   // Persist post-scan track updates (no-op for hot-only).
   virtual void FinalizeScan(double t_now_s,
-                            const double* xs,
-                            const double* ys,
-                            const double* zs,
-                            std::size_t n_tracks,
+                            const trk::TrackBatch& tracks,
                             const trk::IdList* ids) = 0;
 
   // Query AABB overlap candidates.

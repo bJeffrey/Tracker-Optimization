@@ -22,6 +22,16 @@
     <xs:complexType>
       <xs:sequence>
 
+        <xs:element name="CourseGates" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Enabled" type="BoolText" minOccurs="0"/>
+              <xs:element name="RadiusMeters" type="NonNegativeDouble" minOccurs="0"/>
+              <xs:element name="SurfaceGateSideMeters" type="Vec3MetersType" minOccurs="0"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
         <xs:element name="CoarseGating" minOccurs="0">
           <xs:complexType>
             <xs:sequence>

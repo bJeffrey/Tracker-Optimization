@@ -26,6 +26,9 @@ struct SqliteRTreeIndex::Impl {
   sqlite3_stmt* update_stmt = nullptr;
   sqlite3_stmt* query_stmt = nullptr;
   sqlite3_stmt* clear_stmt = nullptr;  // kept if you still have ClearAll() in the header
+  sqlite3_stmt* state_stmt = nullptr;
+  sqlite3_stmt* cov_stmt = nullptr;
+  sqlite3_stmt* meta_stmt = nullptr;
   std::size_t count = 0;
 };
 
@@ -115,6 +118,9 @@ SqliteRTreeIndex::~SqliteRTreeIndex() {
   if (p_->update_stmt) sqlite3_finalize(p_->update_stmt);
   if (p_->query_stmt) sqlite3_finalize(p_->query_stmt);
   if (p_->clear_stmt) sqlite3_finalize(p_->clear_stmt);
+  if (p_->state_stmt) sqlite3_finalize(p_->state_stmt);
+  if (p_->cov_stmt) sqlite3_finalize(p_->cov_stmt);
+  if (p_->meta_stmt) sqlite3_finalize(p_->meta_stmt);
   if (p_->db) sqlite3_close(p_->db);
   delete p_;
   p_ = nullptr;
@@ -138,6 +144,18 @@ void SqliteRTreeIndex::Reset() {
   if (p_->clear_stmt) {
     sqlite3_finalize(p_->clear_stmt);
     p_->clear_stmt = nullptr;
+  }
+  if (p_->state_stmt) {
+    sqlite3_finalize(p_->state_stmt);
+    p_->state_stmt = nullptr;
+  }
+  if (p_->cov_stmt) {
+    sqlite3_finalize(p_->cov_stmt);
+    p_->cov_stmt = nullptr;
+  }
+  if (p_->meta_stmt) {
+    sqlite3_finalize(p_->meta_stmt);
+    p_->meta_stmt = nullptr;
   }
   p_->count = 0;
 
@@ -355,6 +373,120 @@ void SqliteRTreeIndex::SetMeta(const std::string& key, const std::string& value)
     throw std::runtime_error("sqlite3_step(meta upsert) failed");
   }
   sqlite3_finalize(stmt);
+}
+
+static std::string build_cov_upsert_sql() {
+  std::ostringstream cols;
+  std::ostringstream vals;
+  cols << "id";
+  vals << "?1";
+  int param = 2;
+  for (int r = 0; r < 9; ++r) {
+    for (int c = r; c < 9; ++c) {
+      cols << ",p" << r << c;
+      vals << ",?" << param++;
+    }
+  }
+  std::ostringstream sql;
+  sql << "INSERT OR REPLACE INTO track_cov(" << cols.str() << ") VALUES(" << vals.str() << ");";
+  return sql.str();
+}
+
+void SqliteRTreeIndex::EnsureTrackTables() {
+  if (!p_ || !p_->db) throw std::runtime_error("EnsureTrackTables called before Reset");
+  exec_or_throw(p_->db,
+                "CREATE TABLE IF NOT EXISTS track_state("
+                "id INTEGER PRIMARY KEY,"
+                "x REAL,y REAL,z REAL,vx REAL,vy REAL,vz REAL,ax REAL,ay REAL,az REAL,"
+                "t_last_update REAL,t_pred REAL"
+                ");");
+  exec_or_throw(p_->db,
+                "CREATE TABLE IF NOT EXISTS track_meta("
+                "id INTEGER PRIMARY KEY,"
+                "status INTEGER,"
+                "quality REAL"
+                ");");
+  exec_or_throw(p_->db,
+                "CREATE TABLE IF NOT EXISTS track_cov("
+                "id INTEGER PRIMARY KEY,"
+                "p00 REAL,p01 REAL,p02 REAL,p03 REAL,p04 REAL,p05 REAL,p06 REAL,p07 REAL,p08 REAL,"
+                "p11 REAL,p12 REAL,p13 REAL,p14 REAL,p15 REAL,p16 REAL,p17 REAL,p18 REAL,"
+                "p22 REAL,p23 REAL,p24 REAL,p25 REAL,p26 REAL,p27 REAL,p28 REAL,"
+                "p33 REAL,p34 REAL,p35 REAL,p36 REAL,p37 REAL,p38 REAL,"
+                "p44 REAL,p45 REAL,p46 REAL,p47 REAL,p48 REAL,"
+                "p55 REAL,p56 REAL,p57 REAL,p58 REAL,"
+                "p66 REAL,p67 REAL,p68 REAL,"
+                "p77 REAL,p78 REAL,"
+                "p88 REAL"
+                ");");
+
+  if (!p_->state_stmt) {
+    const char* sql =
+      "INSERT OR REPLACE INTO track_state("
+      "id,x,y,z,vx,vy,vz,ax,ay,az,t_last_update,t_pred"
+      ") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12);";
+    if (sqlite3_prepare_v2(p_->db, sql, -1, &p_->state_stmt, nullptr) != SQLITE_OK) {
+      throw std::runtime_error("sqlite3_prepare_v2 track_state upsert failed");
+    }
+  }
+  if (!p_->meta_stmt) {
+    const char* sql =
+      "INSERT OR REPLACE INTO track_meta(id,status,quality) VALUES (?1,?2,?3);";
+    if (sqlite3_prepare_v2(p_->db, sql, -1, &p_->meta_stmt, nullptr) != SQLITE_OK) {
+      throw std::runtime_error("sqlite3_prepare_v2 track_meta upsert failed");
+    }
+  }
+  if (!p_->cov_stmt) {
+    const std::string sql = build_cov_upsert_sql();
+    if (sqlite3_prepare_v2(p_->db, sql.c_str(), -1, &p_->cov_stmt, nullptr) != SQLITE_OK) {
+      throw std::runtime_error("sqlite3_prepare_v2 track_cov upsert failed");
+    }
+  }
+}
+
+void SqliteRTreeIndex::UpsertTrackState(std::uint64_t id, const double* x9, double t_last_update, double t_pred) {
+  if (!p_ || !p_->state_stmt) throw std::runtime_error("UpsertTrackState called before EnsureTrackTables");
+  if (!x9) throw std::runtime_error("UpsertTrackState: null state");
+  sqlite3_reset(p_->state_stmt);
+  sqlite3_clear_bindings(p_->state_stmt);
+  sqlite3_bind_int64(p_->state_stmt, 1, static_cast<sqlite3_int64>(id));
+  for (int k = 0; k < 9; ++k) {
+    sqlite3_bind_double(p_->state_stmt, 2 + k, x9[k]);
+  }
+  sqlite3_bind_double(p_->state_stmt, 11, t_last_update);
+  sqlite3_bind_double(p_->state_stmt, 12, t_pred);
+  const int rc = sqlite3_step(p_->state_stmt);
+  if (rc != SQLITE_DONE) {
+    throw std::runtime_error("sqlite3_step(track_state upsert) failed");
+  }
+}
+
+void SqliteRTreeIndex::UpsertTrackCovUpper(std::uint64_t id, const double* cov_upper45) {
+  if (!p_ || !p_->cov_stmt) throw std::runtime_error("UpsertTrackCovUpper called before EnsureTrackTables");
+  if (!cov_upper45) throw std::runtime_error("UpsertTrackCovUpper: null covariance");
+  sqlite3_reset(p_->cov_stmt);
+  sqlite3_clear_bindings(p_->cov_stmt);
+  sqlite3_bind_int64(p_->cov_stmt, 1, static_cast<sqlite3_int64>(id));
+  for (int k = 0; k < 45; ++k) {
+    sqlite3_bind_double(p_->cov_stmt, 2 + k, cov_upper45[k]);
+  }
+  const int rc = sqlite3_step(p_->cov_stmt);
+  if (rc != SQLITE_DONE) {
+    throw std::runtime_error("sqlite3_step(track_cov upsert) failed");
+  }
+}
+
+void SqliteRTreeIndex::UpsertTrackMeta(std::uint64_t id, int status, double quality) {
+  if (!p_ || !p_->meta_stmt) throw std::runtime_error("UpsertTrackMeta called before EnsureTrackTables");
+  sqlite3_reset(p_->meta_stmt);
+  sqlite3_clear_bindings(p_->meta_stmt);
+  sqlite3_bind_int64(p_->meta_stmt, 1, static_cast<sqlite3_int64>(id));
+  sqlite3_bind_int(p_->meta_stmt, 2, status);
+  sqlite3_bind_double(p_->meta_stmt, 3, quality);
+  const int rc = sqlite3_step(p_->meta_stmt);
+  if (rc != SQLITE_DONE) {
+    throw std::runtime_error("sqlite3_step(track_meta upsert) failed");
+  }
 }
 
 }  // namespace idx

@@ -51,4 +51,23 @@ void SqliteRTreeIndexBackend::SetMeta(const std::string& key, const std::string&
   rtree_.SetMeta(key, value);
 }
 
+void SqliteRTreeIndexBackend::EnsureTrackTables() {
+  rtree_.EnsureTrackTables();
+}
+
+void SqliteRTreeIndexBackend::UpsertTrackState(std::uint64_t id,
+                                               const double* x9,
+                                               double t_last_update,
+                                               double t_pred) {
+  rtree_.UpsertTrackState(id, x9, t_last_update, t_pred);
+}
+
+void SqliteRTreeIndexBackend::UpsertTrackCovUpper(std::uint64_t id, const double* cov_upper45) {
+  rtree_.UpsertTrackCovUpper(id, cov_upper45);
+}
+
+void SqliteRTreeIndexBackend::UpsertTrackMeta(std::uint64_t id, int status, double quality) {
+  rtree_.UpsertTrackMeta(id, status, quality);
+}
+
 } // namespace idx

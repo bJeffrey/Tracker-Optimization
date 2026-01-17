@@ -16,6 +16,11 @@
     <xs:attribute name="max" type="xs:double" use="required"/>
   </xs:complexType>
 
+  <xs:complexType name="Beamwidth2DType">
+    <xs:attribute name="azimuth" type="xs:double" use="required"/>
+    <xs:attribute name="elevation" type="xs:double" use="required"/>
+  </xs:complexType>
+
   <xs:complexType name="FrustumType">
     <xs:sequence>
       <xs:element name="AzimuthDeg" type="AngleRangeType" minOccurs="0"/>
@@ -31,6 +36,9 @@
           <xs:complexType>
             <xs:sequence>
               <xs:element name="Type" type="SensorType"/>
+
+              <xs:element name="BandwidthHz" type="PositiveDouble" minOccurs="0"/>
+              <xs:element name="Beamwidth3dBDeg" type="Beamwidth2DType" minOccurs="0"/>
 
               <xs:element name="ScanVolume" minOccurs="0">
                 <xs:complexType>
@@ -54,6 +62,7 @@
                 <xs:complexType>
                   <xs:sequence>
                     <xs:element name="ScanRateHz" type="PositiveDouble" minOccurs="0"/>
+                    <xs:element name="ScanPeriodSeconds" type="PositiveDouble" minOccurs="0"/>
                     <xs:element name="ScanEvents" minOccurs="0">
                       <xs:complexType>
                         <xs:sequence>

@@ -63,10 +63,7 @@ public:
   }
 
   void FinalizeScan(double /*t_now_s*/,
-                    const double* /*xs*/,
-                    const double* /*ys*/,
-                    const double* /*zs*/,
-                    std::size_t /*n_tracks*/,
+                    const trk::TrackBatch& /*tracks*/,
                     const trk::IdList* /*ids*/) override {}
 
   trk::IdList QueryAabb(const idx::EcefAabb& aabb) const override {
@@ -154,19 +151,34 @@ public:
   }
 
   void FinalizeScan(double t_now_s,
-                    const double* xs,
-                    const double* ys,
-                    const double* zs,
-                    std::size_t n_tracks,
+                    const trk::TrackBatch& tracks,
                     const trk::IdList* ids) override {
-    (void)n_tracks;
+    const std::size_t n_tracks = tracks.n_tracks;
     // TODO: warm-store prefetch/merge goes here.
     if (!ids) {
       // Warm init: do synchronous rebuild so reader sees data immediately.
       if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_write_.get())) {
+        sqlite->EnsureTrackTables();
         const auto t0 = std::chrono::high_resolution_clock::now();
         sqlite->Begin();
-        warm_updater_.Apply(t_now_s, xs, ys, zs, *warm_index_write_);
+        warm_updater_.Apply(t_now_s, tracks.pos_x.data(), tracks.pos_y.data(), tracks.pos_z.data(), *warm_index_write_);
+        for (std::size_t i = 0; i < n_tracks; ++i) {
+          const double* xi = tracks.x_ptr(i);
+          const double* Pi = tracks.P_ptr(i);
+          double cov_upper[45];
+          int k = 0;
+          for (int r = 0; r < 9; ++r) {
+            for (int c = r; c < 9; ++c) {
+              cov_upper[k++] = Pi[r * 9 + c];
+            }
+          }
+          sqlite->UpsertTrackState(tracks.track_id[i], xi,
+                                   tracks.last_update_s[i], tracks.last_cov_prop_s[i]);
+          sqlite->UpsertTrackCovUpper(tracks.track_id[i], cov_upper);
+          sqlite->UpsertTrackMeta(tracks.track_id[i],
+                                  static_cast<int>(tracks.status[i]),
+                                  static_cast<double>(tracks.quality[i]));
+        }
         sqlite->Commit();
         const auto t1 = std::chrono::high_resolution_clock::now();
         const double dt = std::chrono::duration<double>(t1 - t0).count();
@@ -185,7 +197,12 @@ public:
       std::vector<double> upd_xs;
       std::vector<double> upd_ys;
       std::vector<double> upd_zs;
-      warm_updater_.CollectSubsetThreshold(t_now_s, xs, ys, zs, ids->data(), ids->size(),
+      warm_updater_.CollectSubsetThreshold(t_now_s,
+                                           tracks.pos_x.data(),
+                                           tracks.pos_y.data(),
+                                           tracks.pos_z.data(),
+                                           ids->data(),
+                                           ids->size(),
                                            upd_ids, upd_xs, upd_ys, upd_zs);
       if (upd_ids.empty()) return;
 
@@ -194,6 +211,23 @@ public:
       pending_xs_.insert(pending_xs_.end(), upd_xs.begin(), upd_xs.end());
       pending_ys_.insert(pending_ys_.end(), upd_ys.begin(), upd_ys.end());
       pending_zs_.insert(pending_zs_.end(), upd_zs.begin(), upd_zs.end());
+      for (std::size_t idx = 0; idx < upd_ids.size(); ++idx) {
+        const std::size_t i = static_cast<std::size_t>(upd_ids[idx]);
+        const double* xi = tracks.x_ptr(i);
+        const double* Pi = tracks.P_ptr(i);
+        for (int k = 0; k < 9; ++k) {
+          pending_state_.push_back(xi[k]);
+        }
+        for (int r = 0; r < 9; ++r) {
+          for (int c = r; c < 9; ++c) {
+            pending_cov_.push_back(Pi[r * 9 + c]);
+          }
+        }
+        pending_status_.push_back(static_cast<int>(tracks.status[i]));
+        pending_quality_.push_back(static_cast<double>(tracks.quality[i]));
+        pending_last_update_.push_back(tracks.last_update_s[i]);
+        pending_t_pred_.push_back(tracks.last_cov_prop_s[i]);
+      }
       ++pending_scans_;
       pending_tracks_ += upd_ids.size();
 
@@ -295,6 +329,12 @@ private:
     while (true) {
       std::vector<std::uint64_t> ids;
       std::vector<double> xs, ys, zs;
+      std::vector<double> state;
+      std::vector<double> cov;
+      std::vector<int> status;
+      std::vector<double> quality;
+      std::vector<double> last_update;
+      std::vector<double> t_pred;
       {
         std::unique_lock<std::mutex> lock(mu_);
         cv_.wait(lock, [&]() {
@@ -311,6 +351,12 @@ private:
           xs.swap(pending_xs_);
           ys.swap(pending_ys_);
           zs.swap(pending_zs_);
+          state.swap(pending_state_);
+          cov.swap(pending_cov_);
+          status.swap(pending_status_);
+          quality.swap(pending_quality_);
+          last_update.swap(pending_last_update_);
+          t_pred.swap(pending_t_pred_);
           pending_scans_ = 0;
           pending_tracks_ = 0;
           flush_requested_ = false;
@@ -330,15 +376,21 @@ private:
         continue;
       }
 
-      if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_write_.get())) {
-        const auto t_begin0 = std::chrono::high_resolution_clock::now();
-        sqlite->Begin();
-        const auto t_begin1 = std::chrono::high_resolution_clock::now();
+        if (auto* sqlite = dynamic_cast<idx::SqliteRTreeIndexBackend*>(warm_index_write_.get())) {
+          sqlite->EnsureTrackTables();
+          const auto t_begin0 = std::chrono::high_resolution_clock::now();
+          sqlite->Begin();
+          const auto t_begin1 = std::chrono::high_resolution_clock::now();
 
-        const auto t_apply0 = std::chrono::high_resolution_clock::now();
-        for (std::size_t i = 0; i < ids.size(); ++i) {
-          warm_index_write_->UpdatePoint(ids[i], xs[i], ys[i], zs[i]);
-        }
+          const auto t_apply0 = std::chrono::high_resolution_clock::now();
+          for (std::size_t i = 0; i < ids.size(); ++i) {
+            warm_index_write_->UpdatePoint(ids[i], xs[i], ys[i], zs[i]);
+            const double* x9 = &state[i * 9];
+            const double* cov45 = &cov[i * 45];
+            sqlite->UpsertTrackState(ids[i], x9, last_update[i], t_pred[i]);
+            sqlite->UpsertTrackCovUpper(ids[i], cov45);
+            sqlite->UpsertTrackMeta(ids[i], status[i], quality[i]);
+          }
         const auto t_apply1 = std::chrono::high_resolution_clock::now();
 
         const auto t_commit0 = std::chrono::high_resolution_clock::now();
@@ -384,6 +436,12 @@ private:
   std::vector<double> pending_xs_;
   std::vector<double> pending_ys_;
   std::vector<double> pending_zs_;
+  std::vector<double> pending_state_;
+  std::vector<double> pending_cov_;
+  std::vector<int> pending_status_;
+  std::vector<double> pending_quality_;
+  std::vector<double> pending_last_update_;
+  std::vector<double> pending_t_pred_;
   std::thread worker_;
   mutable std::mutex stats_mu_;
   std::mutex flush_mu_;

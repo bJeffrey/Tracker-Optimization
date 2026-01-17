@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <GatingAssociation version="1.0">
+  <CourseGates>
+    <Enabled>true</Enabled>
+    <RadiusMeters>50000</RadiusMeters>
+    <SurfaceGateSideMeters x="396" y="396" z="5236.52"/>
+  </CourseGates>
+
   <CoarseGating>
     <!-- Very fast gate before any statistical gating/association -->
     <Enabled>true</Enabled>

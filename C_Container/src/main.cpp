@@ -20,6 +20,7 @@
 
 // Unified include surface
 #include "tracker.h"
+#include "plugins/database/course_gates.h"
 
 #include <algorithm>
 #include <chrono>
@@ -106,6 +107,7 @@ struct RunStats {
 struct ScanContext {
   const cfg::SensorCfg* sensor = nullptr;
   idx::EcefAabb scan_aabb{};
+  db::CourseGateSet course_gates{};
   idx::SpatialIndexConfig icfg{};
   std::unique_ptr<db::ITrackDatabase> track_db;
   trk::IdList hot_ids;
@@ -136,6 +138,7 @@ struct PipelineState {
   ScanContext scan;
   bool debug_timing = false;
   trk::IdList changed_ids;
+  trk::IdList all_ids;
 };
 
 enum class LogLevel : int {
@@ -502,6 +505,19 @@ bool setup_scan_context(PipelineState& state) {
     (store.index.query_aabb_inflate_m > 0.0) ? store.index.query_aabb_inflate_m : 2000.0;
   state.scan.scan_aabb          = idx::ComputeScanAabbEcefApprox(sensor, state.cfg->ownship, inflate_m);
 
+  if (state.cfg->has_gating_assoc) {
+    state.scan.course_gates =
+      db::BuildCourseGateSet(state.cfg->ownship, state.cfg->gating_assoc.course_gates);
+    if (state.scan.course_gates.enabled) {
+      state.scan.scan_aabb = state.scan.course_gates.prefetch_aabb;
+      if (state.scan.course_gates.gates.size() > 5000 && should_log(LogLevel::WARN)) {
+        std::cerr << "WARNING: course gate count is large ("
+                  << state.scan.course_gates.gates.size()
+                  << "); consider increasing gate size or reducing radius.\n";
+      }
+    }
+  }
+
   // Build kinematics batch from TrackBatch positions.
   build_kinematics_from_track_batch(state.tb, state.scan.tbm);
 
@@ -577,10 +593,7 @@ bool setup_scan_context(PipelineState& state) {
       const auto init_t0 = std::chrono::high_resolution_clock::now();
       state.scan.track_db->FinalizeScan(
         0.0,
-        state.scan.tbm.x_ptr(),
-        state.scan.tbm.y_ptr(),
-        state.scan.tbm.z_ptr(),
-        state.scan.tbm.n,
+        state.tb,
         nullptr);
       const auto init_t1 = std::chrono::high_resolution_clock::now();
       const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
@@ -608,6 +621,13 @@ bool setup_scan_context(PipelineState& state) {
               << "," << state.scan.scan_aabb.min_z << ")\n";
     std::cout << "  aabb.max=(" << state.scan.scan_aabb.max_x << "," << state.scan.scan_aabb.max_y
               << "," << state.scan.scan_aabb.max_z << ")\n";
+    if (state.scan.course_gates.enabled && state.cfg->has_gating_assoc) {
+      const cfg::CourseGatesCfg& cg = state.cfg->gating_assoc.course_gates;
+      std::cout << "  course_gates.enabled=yes"
+                << " radius_m=" << cg.radius_m
+                << " side_m=(" << cg.side_x_m << "," << cg.side_y_m << "," << cg.side_z_m << ")"
+                << " count=" << state.scan.course_gates.gates.size() << "\n";
+    }
     std::cout << "  run_s=" << state.scan.mcfg.T_run_s << " dt_s=" << state.scan.mcfg.dt_s
               << " scan_hz=" << state.scan.mcfg.scan_rate_hz << "\n";
     std::cout << "  index.backend=" << state.scan.icfg.backend
@@ -645,7 +665,14 @@ void process_scan_tick(PipelineState& state,
   state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
   const auto t1 = std::chrono::high_resolution_clock::now();
   // Candidate track indices for this scan.
-  auto ids = state.scan.track_db->QueryAabb(state.scan.scan_aabb);
+  trk::IdList ids;
+  if (state.scan.course_gates.enabled && !state.scan.course_gates.gates.empty()) {
+    ids = db::QueryCourseGates(*state.scan.track_db,
+                               state.scan.course_gates.gates,
+                               tb_ref.n);
+  } else {
+    ids = state.scan.track_db->QueryAabb(state.scan.scan_aabb);
+  }
   const auto t2 = std::chrono::high_resolution_clock::now();
 
   state.stats.update_acc += std::chrono::duration<double>(t1 - t0).count();
@@ -666,22 +693,24 @@ void process_scan_tick(PipelineState& state,
   // Heuristic: treat all scan candidates as changed until filter/maintenance marks specific ids.
   state.changed_ids = ids;
   bool did_finalize = false;
-  if (!state.changed_ids.empty()) {
+    if (!state.changed_ids.empty()) {
     state.scan.track_db->FinalizeScan(
-      t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n, &state.changed_ids);
+      t_s, state.tb, &state.changed_ids);
     did_finalize = true;
   }
   const auto t4 = std::chrono::high_resolution_clock::now();
 
-  // --- Scan-driven covariance aging (lazy): age only candidates to scan time t_s ---
+  // --- Scan-driven covariance aging: age all hot tracks to scan time t_s ---
   // Use TrackBatch::last_cov_prop_s as t_pred_s (P-aged-to time) per-track.
-  if (!ids.empty()) {
+  const trk::IdList& cov_ids =
+      (!state.scan.hot_ids.empty() ? state.scan.hot_ids : state.all_ids);
+  if (!cov_ids.empty()) {
     static std::vector<double> dt_ids;
-    if (dt_ids.capacity() < ids.size()) dt_ids.reserve(ids.size());
-    dt_ids.resize(ids.size());
+    if (dt_ids.capacity() < cov_ids.size()) dt_ids.reserve(cov_ids.size());
+    dt_ids.resize(cov_ids.size());
 
-    for (std::size_t k = 0; k < ids.size(); ++k) {
-      const std::size_t i = static_cast<std::size_t>(ids[k]);
+    for (std::size_t k = 0; k < cov_ids.size(); ++k) {
+      const std::size_t i = static_cast<std::size_t>(cov_ids[k]);
 
       const double dt_i = t_s - state.tb.last_cov_prop_s[i];
       dt_ids[k] = (dt_i > 0.0) ? dt_i : 0.0;
@@ -692,12 +721,12 @@ void process_scan_tick(PipelineState& state,
 
     const auto tc0 = std::chrono::high_resolution_clock::now();
     la::rw_add_qdt_subset_var_dt(state.tb.P.data(), state.Q.data(), state.n,
-                                 ids.data(), dt_ids.data(), ids.size());
+                                 cov_ids.data(), dt_ids.data(), cov_ids.size());
     const auto tc1 = std::chrono::high_resolution_clock::now();
 
     state.stats.cov_age_acc_s += std::chrono::duration<double>(tc1 - tc0).count();
     ++state.stats.cov_age_calls;
-    state.stats.cov_age_tracks_acc += ids.size();
+    state.stats.cov_age_tracks_acc += cov_ids.size();
   }
   const auto t5 = std::chrono::high_resolution_clock::now();
 
@@ -946,6 +975,10 @@ int main(int argc, char** argv) try {
 
   // Tracker storage container (estimate-side)
   state.tb.resize(state.batch);
+  state.all_ids.resize(state.batch);
+  for (std::size_t i = 0; i < state.batch; ++i) {
+    state.all_ids[i] = static_cast<std::uint64_t>(i);
+  }
 
   // ------------------------------
   // Step 2: deterministic generation (truth -> tracker seeding)

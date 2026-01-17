@@ -59,6 +59,21 @@ xmlNode* find_path(xmlDocPtr doc, const std::string& path) {
   return n;
 }
 
+xmlNode* find_path_from(xmlNode* start, const std::string& path) {
+  xmlNode* n = start;
+  if (!n) return nullptr;
+  auto parts = split_path(path);
+  // If path begins with current node name, skip it.
+  if (!parts.empty() && parts[0] == reinterpret_cast<const char*>(n->name)) {
+    parts.erase(parts.begin());
+  }
+  for (const auto& p : parts) {
+    n = find_child(n, p);
+    if (!n) return nullptr;
+  }
+  return n;
+}
+
 std::string node_text(xmlNode* n) {
   if (!n) return "";
   xmlChar* content = xmlNodeGetContent(n);
@@ -153,6 +168,42 @@ void ValidateOrThrow(void* doc, const std::string& xsd_path, const std::string& 
   }
 }
 
+void SaveXmlDocOrThrow(void* doc, const std::string& xml_path) {
+  xmlDocPtr d = reinterpret_cast<xmlDocPtr>(doc);
+  const int rc = xmlSaveFormatFileEnc(xml_path.c_str(), d, "UTF-8", 1);
+  if (rc == -1) {
+    throw std::runtime_error("Failed to write XML: " + xml_path);
+  }
+}
+
+void EnsurePathSetAttr(void* doc,
+                       const std::string& path,
+                       const std::string& attr,
+                       const std::string& value) {
+  xmlDocPtr d = reinterpret_cast<xmlDocPtr>(doc);
+  xmlNode* n = root(d);
+  if (!n) {
+    throw std::runtime_error("EnsurePathSetAttr: XML has no root element");
+  }
+
+  auto parts = split_path(path);
+  if (!parts.empty() && parts[0] == reinterpret_cast<const char*>(n->name)) {
+    parts.erase(parts.begin());
+  }
+  for (const auto& p : parts) {
+    xmlNode* c = find_child(n, p);
+    if (!c) {
+      c = xmlNewChild(n, nullptr, BAD_CAST p.c_str(), nullptr);
+      if (!c) {
+        throw std::runtime_error("EnsurePathSetAttr: failed to create node '" + p + "'");
+      }
+    }
+    n = c;
+  }
+
+  xmlSetProp(n, BAD_CAST attr.c_str(), BAD_CAST value.c_str());
+}
+
 std::string GetText(void* doc, const std::string& path) {
   xmlDocPtr d = reinterpret_cast<xmlDocPtr>(doc);
   xmlNode* n = find_path(d, path);
@@ -224,6 +275,22 @@ double NodeGetDoubleChild(void* node, const std::string& child_name, double defa
 
 int NodeGetIntChild(void* node, const std::string& child_name, int default_val) {
   return to_int(NodeGetTextChild(node, child_name), default_val);
+}
+
+std::string NodeGetTextPath(void* node, const std::string& path) {
+  xmlNode* n = reinterpret_cast<xmlNode*>(node);
+  xmlNode* p = find_path_from(n, path);
+  return node_text(p);
+}
+
+std::string NodeGetAttrPath(void* node, const std::string& path, const std::string& attr) {
+  xmlNode* n = reinterpret_cast<xmlNode*>(node);
+  xmlNode* p = find_path_from(n, path);
+  return node_attr(p, attr);
+}
+
+double NodeGetDoublePath(void* node, const std::string& path, double default_val) {
+  return to_double(NodeGetTextPath(node, path), default_val);
 }
 
 } // namespace cfg::xmlu

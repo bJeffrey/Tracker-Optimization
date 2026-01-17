@@ -120,6 +120,14 @@ if (ENABLE_CONFIG)
   if (ENABLE_LTO AND TARGET config_check)
     set_property(TARGET config_check PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
   endif()
+
+  add_executable(gate_sizing src/gate_sizing_tool.cpp)
+  target_include_directories(gate_sizing PRIVATE ${TRACKER_PUBLIC_INCLUDE_DIRS})
+  target_link_libraries(gate_sizing PRIVATE config_loader)
+
+  if (ENABLE_LTO AND TARGET gate_sizing)
+    set_property(TARGET gate_sizing PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  endif()
 else()
   message(WARNING "ENABLE_CONFIG=OFF: config loader tools will not be built.")
 endif()
@@ -202,6 +210,7 @@ if (ENABLE_PLUGIN_DATABASE)
   find_package(SQLite3 REQUIRED)
 
   add_library(plugin_database STATIC
+    src/plugins/database/course_gates.cpp
     src/plugins/database/rtree_sqlite.cpp
     src/plugins/database/scan_volume.cpp
     src/plugins/database/uniform_grid_index.cpp

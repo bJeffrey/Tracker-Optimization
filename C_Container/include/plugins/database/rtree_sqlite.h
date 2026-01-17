@@ -66,6 +66,11 @@ public:
   std::string GetMeta(const std::string& key) const;
   void SetMeta(const std::string& key, const std::string& value);
 
+  void EnsureTrackTables();
+  void UpsertTrackState(std::uint64_t id, const double* x9, double t_last_update, double t_pred);
+  void UpsertTrackCovUpper(std::uint64_t id, const double* cov_upper45);
+  void UpsertTrackMeta(std::uint64_t id, int status, double quality);
+
 private:
   struct Impl;
   Impl* p_;

@@ -239,12 +239,15 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
   };
 
   // ---- Iterate <Sensor id="..."> ----
-  for (xmlNodePtr n = root->children; n; n = n->next) {
-    if (!node_name_eq(n, "Sensor")) continue;
+    for (xmlNodePtr n = root->children; n; n = n->next) {
+      if (!node_name_eq(n, "Sensor")) continue;
 
-    SensorCfg s{};
-    s.id = get_attr(n, "id");
-    s.type = SensorTypeFromText(child_text(n, "Type"));
+      SensorCfg s{};
+      s.id = get_attr(n, "id");
+      s.type = SensorTypeFromText(child_text(n, "Type"));
+      s.bandwidth_hz = child_double(n, "BandwidthHz", 0.0);
+      s.beamwidth_3db_az_deg = child_attr_double(n, "Beamwidth3dBDeg", "azimuth", 0.0);
+      s.beamwidth_3db_el_deg = child_attr_double(n, "Beamwidth3dBDeg", "elevation", 0.0);
 
     // ScanVolume (optional)
     if (xmlNodePtr scan = find_child(n, "ScanVolume")) {
@@ -296,6 +299,25 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
   }
 
   return out; // DocGuard frees
+}
+
+static GatingAssociationCfg parse_gating_association(void* doc) {
+  GatingAssociationCfg g{};
+  g.course_gates.enabled =
+    xmlu::GetBoolText(doc, "GatingAssociation/CourseGates/Enabled", false);
+  g.course_gates.radius_m =
+    xmlu::GetDouble(doc, "GatingAssociation/CourseGates/RadiusMeters", 0.0);
+
+  auto parse_attr = [&](const std::string& attr) -> double {
+    const std::string v =
+      xmlu::GetAttr(doc, "GatingAssociation/CourseGates/SurfaceGateSideMeters", attr);
+    if (v.empty()) return 0.0;
+    try { return std::stod(v); } catch (...) { return 0.0; }
+  };
+  g.course_gates.side_x_m = parse_attr("x");
+  g.course_gates.side_y_m = parse_attr("y");
+  g.course_gates.side_z_m = parse_attr("z");
+  return g;
 }
 
 
@@ -614,6 +636,20 @@ ConfigBundle ConfigLoader::Load(const std::string& system_xml_path, const std::s
 if (!bundle.paths.sensors_xml.empty()) {
   bundle.sensors = parse_sensors(bundle.paths.sensors_xml, xsd_dir);
   bundle.has_sensors = !bundle.sensors.sensors.empty();
+}
+
+// 4c) gating_association.xml (optional)
+if (!bundle.paths.gating_assoc_xml.empty()) {
+  void* ga_doc = xmlu::ReadXmlDocOrThrow(bundle.paths.gating_assoc_xml);
+  try {
+    validate_if_enabled(ga_doc, xsd_dir, bundle.paths.gating_assoc_xml);
+    bundle.gating_assoc = parse_gating_association(ga_doc);
+    bundle.has_gating_assoc = true;
+  } catch (...) {
+    xmlu::FreeXmlDoc(ga_doc);
+    throw;
+  }
+  xmlu::FreeXmlDoc(ga_doc);
 }
 
 // 5) store.xml

@@ -18,6 +18,16 @@ std::string RootName(void* doc);
 // Note: requires libxml2 built with schema support (standard for distro packages).
 void ValidateOrThrow(void* doc, const std::string& xsd_path, const std::string& xml_path_for_errors);
 
+// Save a doc back to disk (pretty-printed); throws on failure.
+void SaveXmlDocOrThrow(void* doc, const std::string& xml_path);
+
+// Ensure an element path exists (creating nodes if needed) and set an attribute.
+// Path is "Root/Child/Subchild" relative to the root element.
+void EnsurePathSetAttr(void* doc,
+                       const std::string& path,
+                       const std::string& attr,
+                       const std::string& value);
+
 // Extract helpers (first child element text, attribute, etc.)
 // Paths are "Element/Child/Subchild" relative to the root; missing returns empty.
 std::string GetText(void* doc, const std::string& path);
@@ -37,5 +47,8 @@ std::string NodeGetAttr(void* node, const std::string& attr);
 std::string NodeGetTextChild(void* node, const std::string& child_name);
 double NodeGetDoubleChild(void* node, const std::string& child_name, double default_val);
 int NodeGetIntChild(void* node, const std::string& child_name, int default_val);
+std::string NodeGetTextPath(void* node, const std::string& path);
+std::string NodeGetAttrPath(void* node, const std::string& path, const std::string& attr);
+double NodeGetDoublePath(void* node, const std::string& path, double default_val);
 
 } // namespace cfg::xmlu

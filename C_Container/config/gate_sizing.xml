@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<GateSizing version="3.0">
+  <Planar>
+    <!-- Max expected target speed for XY sizing. -->
+    <MaxTargetSpeedMps>900</MaxTargetSpeedMps>
+
+    <!-- Extra buffer as a fraction of the velocity term (e.g., 0.1 = 10%). -->
+    <VelocityBufferFraction>0.1</VelocityBufferFraction>
+  </Planar>
+
+  <AltitudeBinning>
+    <!-- Create bins from 0 to this altitude (meters). -->
+    <MaxTargetAltitudeMeters>20000</MaxTargetAltitudeMeters>
+
+    <!-- Altitude bin size (meters). If 0, a single bin at max altitude is used. -->
+    <AltitudeBinMeters>1000</AltitudeBinMeters>
+  </AltitudeBinning>
+</GateSizing>

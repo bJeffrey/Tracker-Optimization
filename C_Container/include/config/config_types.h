@@ -161,6 +161,9 @@ struct ScanVolumeCfg {
 struct SensorCfg {
   std::string id;
   SensorType type = SensorType::UNKNOWN;
+  double bandwidth_hz = 0.0;
+  double beamwidth_3db_az_deg = 0.0;
+  double beamwidth_3db_el_deg = 0.0;
   ScanVolumeCfg scan{};
   double scan_rate_hz = 0.0;  // schedule hint
 
@@ -177,6 +180,21 @@ struct SensorsCfg {
     return nullptr;
   }
 }; // <-- FIX: do NOT close namespace here
+
+// ------------------------------
+// Gating association (gating_association.xml)
+// ------------------------------
+struct CourseGatesCfg {
+  bool enabled = false;
+  double radius_m = 0.0;
+  double side_x_m = 0.0;
+  double side_y_m = 0.0;
+  double side_z_m = 0.0;
+};
+
+struct GatingAssociationCfg {
+  CourseGatesCfg course_gates{};
+};
 
 // ------------------------------
 // Store (store.xml)
@@ -314,6 +332,9 @@ struct ConfigBundle {
 
   SensorsCfg sensors;           // default-initialized if not present
   bool has_sensors = false;
+
+  GatingAssociationCfg gating_assoc;
+  bool has_gating_assoc = false;
 
   StoreProfile store_profile;
 
