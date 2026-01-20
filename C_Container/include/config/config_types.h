@@ -206,6 +206,8 @@ struct SpatialIndexCfg {
   double t_max_s = 0.0;
   std::uint64_t dense_cell_probe_limit = 200000;
   double query_aabb_inflate_m = 0.0; // inflate ECEF AABB for coarse DB query
+  double hot_prefetch_min_s = 0.0;   // minimum hot buffer (seconds) before refresh
+  double hot_prefetch_window_s = 0.0; // horizon to prefetch (seconds) on refresh
 };
 
 struct SqliteCfg {

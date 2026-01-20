@@ -111,6 +111,10 @@ struct ScanContext {
   idx::SpatialIndexConfig icfg{};
   std::unique_ptr<db::ITrackDatabase> track_db;
   trk::IdList hot_ids;
+  double hot_prefetch_min_s = 0.0;
+  double hot_prefetch_window_s = 0.0;
+  double last_prefetch_t_s = 0.0;
+  bool hot_prefetch_cadence_enabled = false;
   trk::TrackKinematicsBatch tbm;
   trk::ModelBuckets buckets;
   trk::MotionModel_CA9 model_ca;
@@ -554,6 +558,16 @@ bool setup_scan_context(PipelineState& state) {
     (state.cli.t_max_s_cli > 0.0) ? state.cli.t_max_s_cli :
     (store.index.t_max_s > 0.0 ? store.index.t_max_s : (2.0 / state.scan.mcfg.scan_rate_hz));
 
+  // Hot prefetch cadence (optional)
+  state.scan.hot_prefetch_min_s = std::max(0.0, store.index.hot_prefetch_min_s);
+  state.scan.hot_prefetch_window_s = std::max(0.0, store.index.hot_prefetch_window_s);
+  if (state.scan.hot_prefetch_window_s > 0.0 &&
+      state.scan.hot_prefetch_window_s < state.scan.hot_prefetch_min_s) {
+    state.scan.hot_prefetch_window_s = state.scan.hot_prefetch_min_s;
+  }
+  state.scan.hot_prefetch_cadence_enabled =
+    (state.scan.hot_prefetch_min_s > 0.0 || state.scan.hot_prefetch_window_s > 0.0);
+
   db::TrackDatabaseConfig db_cfg;
   db_cfg.mode = store.mode;
   db_cfg.backend = state.scan.icfg.backend;
@@ -608,6 +622,7 @@ bool setup_scan_context(PipelineState& state) {
 
     // Stage 1: warm prefetch to define hot working set for the scan volume.
     state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
+    state.scan.last_prefetch_t_s = 0.0;
     if (should_log(LogLevel::INFO)) {
       std::cout << "  hot_prefetch_n=" << state.scan.hot_ids.size() << "\n";
     }
@@ -633,6 +648,11 @@ bool setup_scan_context(PipelineState& state) {
     std::cout << "  index.backend=" << state.scan.icfg.backend
               << " supports_incremental="
               << (state.scan.track_db->SupportsIncrementalUpdates() ? "yes" : "no") << "\n";
+    if (state.scan.hot_prefetch_cadence_enabled &&
+        state.cfg->store_profile.mode == "HOT_PLUS_WARM") {
+      std::cout << "  hot_prefetch_min_s=" << state.scan.hot_prefetch_min_s
+                << " hot_prefetch_window_s=" << state.scan.hot_prefetch_window_s << "\n";
+    }
     if (state.scan.icfg.backend == "uniform_grid") {
       std::cout << "  grid.cell_m=" << state.scan.icfg.grid_cell_m
                 << " d_th_m=" << state.scan.d_th_m
@@ -658,7 +678,22 @@ void process_scan_tick(PipelineState& state,
   ++state.stats.scan_count;
 
   if (state.cfg->store_profile.mode == "HOT_PLUS_WARM") {
-    state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
+    bool do_prefetch = true;
+    if (state.scan.hot_prefetch_cadence_enabled) {
+      const double window_s =
+        (state.scan.hot_prefetch_window_s > 0.0)
+          ? state.scan.hot_prefetch_window_s
+          : state.scan.hot_prefetch_min_s;
+      if (window_s > 0.0) {
+        const double elapsed = t_s - state.scan.last_prefetch_t_s;
+        const double remaining = window_s - elapsed;
+        do_prefetch = (remaining <= state.scan.hot_prefetch_min_s);
+      }
+    }
+    if (do_prefetch) {
+      state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
+      state.scan.last_prefetch_t_s = t_s;
+    }
   }
 
   const auto t0 = std::chrono::high_resolution_clock::now();
@@ -846,9 +881,9 @@ void write_csvs(const PipelineState& state) {
     os
       << "date,time,version,system_xml,xsd_dir,targets_xml,dim,tracks,dt_s,run_s,scan_hz,"
          "scan_count,loop_time_s,loop_time_per_scan_s,avg_update_s,avg_query_s,avg_n_updated,finalize_total_s,finalize_avg_s,"
-         "warm_commit_every_scans,"
+         "warm_commit_every_scans,hot_prefetch_min_s,hot_prefetch_window_s,"
          "finalize_begin_total_s,finalize_begin_avg_s,finalize_apply_total_s,finalize_apply_avg_s,"
-         "finalize_commit_total_s,finalize_commit_avg_s,prefetch_total_s,prefetch_avg_s,"
+         "finalize_commit_total_s,finalize_commit_avg_s,prefetch_total_s,prefetch_avg_s,prefetch_calls,"
          "cov_age_calls,avg_tracks_per_call,cov_age_total_s,cov_age_avg_s,checksum\n";
   };
   auto write_row = [&](std::ostream& os) {
@@ -879,6 +914,8 @@ void write_csvs(const PipelineState& state) {
       << state.stats.finalize_acc_s << ','
       << avg_finalize_s << ','
       << warm_commit_scans << ','
+      << state.scan.hot_prefetch_min_s << ','
+      << state.scan.hot_prefetch_window_s << ','
       << db_stats.finalize_begin_acc_s << ','
       << avg_finalize_begin_s << ','
       << db_stats.finalize_apply_acc_s << ','
@@ -887,6 +924,7 @@ void write_csvs(const PipelineState& state) {
       << avg_finalize_commit_s << ','
       << db_stats.prefetch_acc_s << ','
       << avg_prefetch_s << ','
+      << db_stats.prefetch_calls << ','
       << state.stats.cov_age_calls << ','
       << avg_tracks_per_call << ','
       << state.stats.cov_age_acc_s << ','

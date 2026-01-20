@@ -345,6 +345,10 @@ static StoreCfg parse_store(void* doc) {
     p.index.cell_m = xmlu::NodeGetDoubleChild(n, "IndexCellMeters", p.index.cell_m);
     p.index.d_th_m = xmlu::NodeGetDoubleChild(n, "IndexMoveThresholdMeters", p.index.d_th_m);
     p.index.t_max_s = xmlu::NodeGetDoubleChild(n, "IndexMaxAgeSeconds", p.index.t_max_s);
+    p.index.hot_prefetch_min_s =
+      xmlu::NodeGetDoubleChild(n, "HotPrefetchMinSeconds", p.index.hot_prefetch_min_s);
+    p.index.hot_prefetch_window_s =
+      xmlu::NodeGetDoubleChild(n, "HotPrefetchWindowSeconds", p.index.hot_prefetch_window_s);
 
     const int dense = xmlu::NodeGetIntChild(
       n,

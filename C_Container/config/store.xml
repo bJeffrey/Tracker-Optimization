@@ -16,6 +16,8 @@
     <IndexMaxAgeSeconds>1.0</IndexMaxAgeSeconds>
     <IndexDenseCellProbeLimit>200000</IndexDenseCellProbeLimit>
     <QueryAabbInflateMeters>2000</QueryAabbInflateMeters>
+    <HotPrefetchMinSeconds>2</HotPrefetchMinSeconds>
+    <HotPrefetchWindowSeconds>5</HotPrefetchWindowSeconds>
     <WarmCommitEveryScans>1</WarmCommitEveryScans>
     <WarmCommitAfterTracks>1000</WarmCommitAfterTracks>
 
@@ -42,6 +44,8 @@
     <IndexMaxAgeSeconds>1.0</IndexMaxAgeSeconds>
     <IndexDenseCellProbeLimit>200000</IndexDenseCellProbeLimit>
     <QueryAabbInflateMeters>2000</QueryAabbInflateMeters>
+    <HotPrefetchMinSeconds>2</HotPrefetchMinSeconds>
+    <HotPrefetchWindowSeconds>5</HotPrefetchWindowSeconds>
 
     <Sqlite>
       <!-- Warm store on disk -->
