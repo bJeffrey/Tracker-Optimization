@@ -21,6 +21,8 @@
 // Unified include surface
 #include "tracker.h"
 #include "plugins/database/course_gates.h"
+#include "common/coordinate_utilities/coordinate_transform.h"
+#include "plugins/measurement/IMeasurementModel.h"
 
 #include <algorithm>
 #include <chrono>
@@ -33,6 +35,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -108,6 +111,27 @@ struct ScanContext {
   const cfg::SensorCfg* sensor = nullptr;
   idx::EcefAabb scan_aabb{};
   db::CourseGateSet course_gates{};
+  struct EnuAabb {
+    double min_e = 0.0;
+    double max_e = 0.0;
+    double min_n = 0.0;
+    double max_n = 0.0;
+    double min_u = 0.0;
+    double max_u = 0.0;
+  };
+  std::vector<EnuAabb> course_gates_enu{};
+  struct GateGrid {
+    bool enabled = false;
+    double origin_e = 0.0;
+    double origin_n = 0.0;
+    double step_e = 0.0;
+    double step_n = 0.0;
+    double radius_m = 0.0;
+    std::size_t count_e = 0;
+    std::size_t count_n = 0;
+    std::vector<int> map; // index -> gate_index, -1 if no gate
+  };
+  GateGrid gate_grid{};
   idx::SpatialIndexConfig icfg{};
   std::unique_ptr<db::ITrackDatabase> track_db;
   trk::IdList hot_ids;
@@ -136,6 +160,8 @@ struct PipelineState {
   int n = 0;
   double dt_s = 0.0;
   std::size_t batch = 0;
+  sim::TargetTruth truth;
+  bool has_truth = false;
   trk::TrackBatch tb;
   std::vector<double> Q;
   RunStats stats;
@@ -143,6 +169,7 @@ struct PipelineState {
   bool debug_timing = false;
   trk::IdList changed_ids;
   trk::IdList all_ids;
+  meas::MeasurementBatch meas_batch;
 };
 
 enum class LogLevel : int {
@@ -380,21 +407,21 @@ std::vector<double> build_process_noise_q(const cfg::ConfigBundle& cfg, int n) {
  */
 void seed_tracks(PipelineState& state) {
   if (!state.cli.no_gen) {
-    sim::TargetTruth truth;
-    truth.resize(state.batch);
+    state.truth.resize(state.batch);
 
     // sim: truth-only
     sim::GenerateTruthFromXml(state.targets_xml,
                               state.cli.xsd_dir,
                               state.cfg->ownship,
-                              truth);
+                              state.truth);
 
     // trk: explicit bridge (cov init + stale age + meta)
     trk::SeedTracksFromTruthXml(state.targets_xml,
                                 state.cli.xsd_dir,
                                 state.cfg->ownship,
-                                truth,
+                                state.truth,
                                 state.tb);
+    state.has_truth = true;
   } else {
     // Fallback: simple initialization if generation is disabled.
     state.tb.set_cov_identity_scaled(1.0);
@@ -411,6 +438,7 @@ void seed_tracks(PipelineState& state) {
       double* xi = state.tb.x_ptr(i);
       std::fill(xi, xi + trk::TrackBatch::kDim, 0.0);
     }
+    state.has_truth = false;
   }
 }
 
@@ -469,7 +497,218 @@ inline void build_kinematics_from_track_batch(const trk::TrackBatch& tb_in,
 /**
  * @brief Placeholder for measurement generation stage.
  */
-void stage_measurement_generation(PipelineState&, const trk::IdList&, double) {}
+void stage_measurement_generation(PipelineState& state, double t_s) {
+  if (!state.has_truth || !state.cfg->has_sensors || state.cfg->sensors.sensors.empty()) {
+    return;
+  }
+  const cfg::SensorCfg& sensor = state.cfg->sensors.sensors.front();
+  if (!sensor.meas_model.has_radar ||
+      sensor.meas_model.radar.type == cfg::RadarMeasurementType::UNKNOWN) {
+    return;
+  }
+
+  coord::AerRadBatch aer;
+  coord::EcefToAerBatch(state.truth.pos, state.cfg->ownship, aer);
+
+  meas::MeasurementBatch batch;
+  batch.meta.sensor_id = sensor.id;
+  batch.meta.frame = sensor.scan.frame;
+  batch.meta.timestamp_s = t_s;
+  batch.meta.ownship_x_ecef = state.cfg->ownship.pos_x;
+  batch.meta.ownship_y_ecef = state.cfg->ownship.pos_y;
+  batch.meta.ownship_z_ecef = state.cfg->ownship.pos_z;
+  batch.type = sensor.meas_model.radar.type;
+  batch.measurements.clear();
+  batch.measurements.reserve(state.truth.n + sensor.meas_model.radar.false_alarm_count);
+
+  const double snr_lin = std::pow(10.0, 0.1 * sensor.meas_model.radar.ref_snr_db);
+  const double bw_az_rad = (sensor.beamwidth_3db_az_deg > 0.0)
+                             ? (sensor.beamwidth_3db_az_deg * 3.14159265358979323846 / 180.0)
+                             : 0.0;
+  const double bw_el_rad = (sensor.beamwidth_3db_el_deg > 0.0)
+                             ? (sensor.beamwidth_3db_el_deg * 3.14159265358979323846 / 180.0)
+                             : 0.0;
+  const double sigma_r = (snr_lin > 0.0)
+                           ? (sensor.meas_model.radar.ref_range_m / snr_lin)
+                           : 0.0;
+  const double sigma_az = (snr_lin > 0.0) ? (bw_az_rad / snr_lin) : 0.0;
+  const double sigma_el = (snr_lin > 0.0) ? (bw_el_rad / snr_lin) : 0.0;
+
+  static std::mt19937 rng(1337u);
+  std::normal_distribution<double> nr(0.0, sigma_r);
+  std::normal_distribution<double> naz(0.0, sigma_az);
+  std::normal_distribution<double> nel(0.0, sigma_el);
+  std::uniform_real_distribution<double> uni01(0.0, 1.0);
+
+  const double det_p = std::min(1.0, std::max(0.0, sensor.meas_model.radar.detection_prob));
+  const double az_min = sensor.scan.frustum.az_min_deg * 3.14159265358979323846 / 180.0;
+  const double az_max = sensor.scan.frustum.az_max_deg * 3.14159265358979323846 / 180.0;
+  const double el_min = sensor.scan.frustum.el_min_deg * 3.14159265358979323846 / 180.0;
+  const double el_max = sensor.scan.frustum.el_max_deg * 3.14159265358979323846 / 180.0;
+  const double r_min = sensor.scan.frustum.r_min_m;
+  const double r_max = sensor.scan.frustum.r_max_m;
+  std::uniform_real_distribution<double> uni_az(az_min, az_max);
+  std::uniform_real_distribution<double> uni_el(el_min, el_max);
+  std::uniform_real_distribution<double> uni_r(r_min, r_max);
+
+  std::uint64_t meas_seq = 0;
+  for (std::size_t i = 0; i < state.truth.n; ++i) {
+    if (uni01(rng) > det_p) continue;
+    meas::RadarMeasurement m{};
+    const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
+    m.id = (t_us << 20) | (meas_seq++ & 0xFFFFFu);
+    const double r = aer.r_m[i];
+    const double az = aer.az_rad[i];
+    const double el = aer.el_rad[i];
+
+    m.range_m = r + nr(rng);
+    m.az_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (az + naz(rng)) : 0.0;
+    m.el_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (el + nel(rng)) : 0.0;
+    m.snr_db = sensor.meas_model.radar.ref_snr_db;
+    m.rcs_m2 = sensor.meas_model.radar.ref_rcs_m2;
+
+    m.R = {0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0};
+    m.R[0] = sigma_r * sigma_r;
+    if (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) {
+      m.R[4] = sigma_az * sigma_az;
+      m.R[8] = sigma_el * sigma_el;
+    }
+
+    batch.measurements.push_back(m);
+  }
+
+  for (std::uint32_t k = 0; k < sensor.meas_model.radar.false_alarm_count; ++k) {
+    if (r_max <= r_min) break;
+    meas::RadarMeasurement m{};
+    const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
+    m.id = (t_us << 20) | (meas_seq++ & 0xFFFFFu);
+    const double r = uni_r(rng);
+    const double az = uni_az(rng);
+    const double el = uni_el(rng);
+
+    m.range_m = r + nr(rng);
+    m.az_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (az + naz(rng)) : 0.0;
+    m.el_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (el + nel(rng)) : 0.0;
+    m.snr_db = sensor.meas_model.radar.ref_snr_db;
+    m.rcs_m2 = sensor.meas_model.radar.ref_rcs_m2;
+
+    m.R = {0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0};
+    m.R[0] = sigma_r * sigma_r;
+    if (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) {
+      m.R[4] = sigma_az * sigma_az;
+      m.R[8] = sigma_el * sigma_el;
+    }
+
+    batch.measurements.push_back(m);
+  }
+
+  state.meas_batch = std::move(batch);
+
+  if (state.scan.course_gates.enabled && state.scan.gate_grid.enabled) {
+    const auto& grid = state.scan.gate_grid;
+    for (auto& m : state.meas_batch.measurements) {
+      double e = 0.0, n = 0.0, u = 0.0;
+      coord::AerToEnuPoint(m.az_rad, m.el_rad, m.range_m, e, n, u);
+      m.gate_index = -1;
+
+      const double fe = (e - grid.origin_e) / grid.step_e;
+      const double fn = (n - grid.origin_n) / grid.step_n;
+      const std::int64_t ie = static_cast<std::int64_t>(std::floor(fe + 1e-9));
+      const std::int64_t in = static_cast<std::int64_t>(std::floor(fn + 1e-9));
+      if (ie < 0 || in < 0) continue;
+      if (static_cast<std::size_t>(ie) >= grid.count_e ||
+          static_cast<std::size_t>(in) >= grid.count_n) continue;
+      const std::size_t map_idx = static_cast<std::size_t>(in) * grid.count_e +
+                                  static_cast<std::size_t>(ie);
+      if (map_idx >= grid.map.size()) continue;
+      const int gate_idx = grid.map[map_idx];
+      if (gate_idx >= 0) {
+        m.gate_index = gate_idx;
+      }
+    }
+  }
+
+  if (!ensure_output_dir(state.cli.output_dir)) {
+    return;
+  }
+
+  static bool log_init = false;
+  static bool wrote_header_current = false;
+  static bool wrote_header_archive = false;
+  static fs::path log_path;
+  static fs::path archive_path;
+  if (!log_init) {
+    const std::tm run_tm = local_tm_now();
+    const std::string date_folder = format_tm(run_tm, "%Y%m%d");
+    const fs::path archive_dir = fs::path(state.cli.output_dir) / "archive" / date_folder;
+    ensure_output_dir(archive_dir.string());
+    archive_path =
+      archive_dir / ("sensor_course_gate_" + format_tm(run_tm, "%Y%m%d_%H%M%S") + ".csv");
+    log_path = fs::path(state.cli.output_dir) / "sensor_course_gate_log.csv";
+    log_init = true;
+  }
+
+  const char* header =
+    "date,time,scan_index,t_scan_s,meas_time_us,sensor_id,meas_uid,gate_index,range_m,az_rad,el_rad,snr_db,rcs_m2\n";
+
+  if (!wrote_header_current) {
+    std::ofstream trunc_out(log_path, std::ios::trunc);
+    if (!trunc_out) return;
+    trunc_out << header;
+    wrote_header_current = true;
+  }
+
+  if (!wrote_header_archive) {
+    std::ofstream trunc_out(archive_path, std::ios::trunc);
+    if (!trunc_out) return;
+    trunc_out << header;
+    wrote_header_archive = true;
+  }
+
+  std::ofstream out(log_path, std::ios::app);
+  if (!out) return;
+  std::ofstream out_archive(archive_path, std::ios::app);
+  if (!out_archive) return;
+
+  const std::tm run_tm = local_tm_now();
+  const std::string date_str = format_tm(run_tm, "%Y-%m-%d");
+  const std::string time_str = format_tm(run_tm, "%H:%M:%S");
+
+  const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
+  for (const auto& m : state.meas_batch.measurements) {
+    if (m.gate_index < 0) continue;
+    out << date_str << ','
+        << time_str << ','
+        << state.stats.scan_count << ','
+        << t_s << ','
+        << t_us << ','
+        << state.meas_batch.meta.sensor_id << ','
+        << m.id << ','
+        << m.gate_index << ','
+        << m.range_m << ','
+        << m.az_rad << ','
+        << m.el_rad << ','
+        << m.snr_db << ','
+        << m.rcs_m2 << '\n';
+    out_archive << date_str << ','
+                << time_str << ','
+                << state.stats.scan_count << ','
+                << t_s << ','
+                << t_us << ','
+                << state.meas_batch.meta.sensor_id << ','
+                << m.id << ','
+                << m.gate_index << ','
+                << m.range_m << ','
+                << m.az_rad << ','
+                << m.el_rad << ','
+                << m.snr_db << ','
+                << m.rcs_m2 << '\n';
+  }
+}
 /**
  * @brief Placeholder for coarse gating stage.
  */
@@ -514,6 +753,73 @@ bool setup_scan_context(PipelineState& state) {
       db::BuildCourseGateSet(state.cfg->ownship, state.cfg->gating_assoc.course_gates);
     if (state.scan.course_gates.enabled) {
       state.scan.scan_aabb = state.scan.course_gates.prefetch_aabb;
+      state.scan.course_gates_enu.clear();
+      state.scan.course_gates_enu.reserve(state.scan.course_gates.gates.size());
+      for (const auto& gate : state.scan.course_gates.gates) {
+        const double xs[2] = {gate.min_x, gate.max_x};
+        const double ys[2] = {gate.min_y, gate.max_y};
+        const double zs[2] = {gate.min_z, gate.max_z};
+        ScanContext::EnuAabb enu_gate{};
+        bool first = true;
+        for (double x : xs) {
+          for (double y : ys) {
+            for (double z : zs) {
+              double e = 0.0, n = 0.0, u = 0.0;
+              coord::EcefToEnuPoint(x, y, z, state.cfg->ownship, e, n, u);
+              if (first) {
+                enu_gate.min_e = enu_gate.max_e = e;
+                enu_gate.min_n = enu_gate.max_n = n;
+                enu_gate.min_u = enu_gate.max_u = u;
+                first = false;
+              } else {
+                enu_gate.min_e = std::min(enu_gate.min_e, e);
+                enu_gate.max_e = std::max(enu_gate.max_e, e);
+                enu_gate.min_n = std::min(enu_gate.min_n, n);
+                enu_gate.max_n = std::max(enu_gate.max_n, n);
+                enu_gate.min_u = std::min(enu_gate.min_u, u);
+                enu_gate.max_u = std::max(enu_gate.max_u, u);
+              }
+            }
+          }
+        }
+        state.scan.course_gates_enu.push_back(enu_gate);
+      }
+
+      // Build an O(1) ENU gate lookup grid matching BuildCourseGateSet iteration order.
+      state.scan.gate_grid = ScanContext::GateGrid{};
+      const cfg::CourseGatesCfg& cg = state.cfg->gating_assoc.course_gates;
+      if (cg.radius_m > 0.0 && cg.side_x_m > 0.0 && cg.side_y_m > 0.0) {
+        const double r = cg.radius_m;
+        const double step_e = cg.side_x_m;
+        const double step_n = cg.side_y_m;
+        std::size_t count_e = 0;
+        for (double e = -r; e <= r + 1e-6; e += step_e) ++count_e;
+        std::size_t count_n = 0;
+        for (double n = -r; n <= r + 1e-6; n += step_n) ++count_n;
+
+        state.scan.gate_grid.enabled = (count_e > 0 && count_n > 0);
+        state.scan.gate_grid.origin_e = -r;
+        state.scan.gate_grid.origin_n = -r;
+        state.scan.gate_grid.step_e = step_e;
+        state.scan.gate_grid.step_n = step_n;
+        state.scan.gate_grid.radius_m = r;
+        state.scan.gate_grid.count_e = count_e;
+        state.scan.gate_grid.count_n = count_n;
+        state.scan.gate_grid.map.assign(count_e * count_n, -1);
+
+        std::size_t gate_idx = 0;
+        std::size_t j = 0;
+        for (double n = -r; n <= r + 1e-6; n += step_n, ++j) {
+          std::size_t i = 0;
+          for (double e = -r; e <= r + 1e-6; e += step_e, ++i) {
+            if ((e * e + n * n) > (r * r)) continue;
+            const std::size_t map_idx = j * count_e + i;
+            if (map_idx < state.scan.gate_grid.map.size()) {
+              state.scan.gate_grid.map[map_idx] = static_cast<int>(gate_idx++);
+            }
+          }
+        }
+      }
       if (state.scan.course_gates.gates.size() > 5000 && should_log(LogLevel::WARN)) {
         std::cerr << "WARNING: course gate count is large ("
                   << state.scan.course_gates.gates.size()
@@ -699,9 +1005,50 @@ void process_scan_tick(PipelineState& state,
   const auto t0 = std::chrono::high_resolution_clock::now();
   state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
   const auto t1 = std::chrono::high_resolution_clock::now();
+
+  stage_measurement_generation(state, t_s);
+
+  const auto t1q = std::chrono::high_resolution_clock::now();
   // Candidate track indices for this scan.
   trk::IdList ids;
-  if (state.scan.course_gates.enabled && !state.scan.course_gates.gates.empty()) {
+  if (state.scan.course_gates.enabled && !state.scan.course_gates.gates.empty() &&
+      !state.meas_batch.measurements.empty()) {
+    const std::size_t gate_count = state.scan.course_gates.gates.size();
+    std::vector<std::uint8_t> gate_used(gate_count, 0);
+    for (const auto& m : state.meas_batch.measurements) {
+      if (m.gate_index < 0) continue;
+      const std::size_t g = static_cast<std::size_t>(m.gate_index);
+      if (g < gate_used.size()) gate_used[g] = 1;
+    }
+
+    std::vector<trk::IdList> gate_candidates(gate_count);
+    for (std::size_t g = 0; g < gate_count; ++g) {
+      if (!gate_used[g]) continue;
+      gate_candidates[g] = state.scan.track_db->QueryAabb(state.scan.course_gates.gates[g]);
+    }
+
+    static std::vector<std::uint8_t> seen;
+    if (seen.size() < tb_ref.n) {
+      seen.assign(tb_ref.n, 0);
+    } else {
+      std::fill(seen.begin(), seen.end(), 0);
+    }
+
+    for (const auto& m : state.meas_batch.measurements) {
+      if (m.gate_index < 0) continue;
+      const std::size_t g = static_cast<std::size_t>(m.gate_index);
+      if (g >= gate_candidates.size()) continue;
+      const auto& gate_ids = gate_candidates[g];
+      for (std::uint64_t id : gate_ids) {
+        const std::size_t idx = static_cast<std::size_t>(id);
+        if (idx >= seen.size()) continue;
+        if (!seen[idx]) {
+          seen[idx] = 1;
+          ids.push_back(id);
+        }
+      }
+    }
+  } else if (state.scan.course_gates.enabled && !state.scan.course_gates.gates.empty()) {
     ids = db::QueryCourseGates(*state.scan.track_db,
                                state.scan.course_gates.gates,
                                tb_ref.n);
@@ -711,12 +1058,11 @@ void process_scan_tick(PipelineState& state,
   const auto t2 = std::chrono::high_resolution_clock::now();
 
   state.stats.update_acc += std::chrono::duration<double>(t1 - t0).count();
-  state.stats.query_acc  += std::chrono::duration<double>(t2 - t1).count();
+  state.stats.query_acc  += std::chrono::duration<double>(t2 - t1q).count();
   state.stats.nupd_acc   += static_cast<double>(state.scan.track_db->NumUpdatedLastUpdate());
   ++state.stats.k_acc;
 
-  // Placeholder pipeline stages (measurement -> gating -> association -> filter -> maintenance)
-  stage_measurement_generation(state, ids, t_s);
+  // Placeholder pipeline stages (gating -> association -> filter -> maintenance)
   stage_coarse_gating(state, ids, t_s);
   stage_fine_gating(state, ids, t_s);
   stage_association(state, ids, t_s);

@@ -141,6 +141,9 @@ if (ENABLE_PLUGIN_PROPAGATOR)
   add_library(plugin_propagator STATIC)
   target_include_directories(plugin_propagator PUBLIC ${TRACKER_PUBLIC_INCLUDE_DIRS})
   target_link_libraries(plugin_propagator PUBLIC plugin_framework)
+  target_sources(plugin_propagator PRIVATE
+    src/plugins/propagator/coord/coordinate_transform.cpp
+  )
 
   if (CMAKE_BUILD_TYPE STREQUAL "Release")
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

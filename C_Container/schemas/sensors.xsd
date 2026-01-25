@@ -29,6 +29,13 @@
     </xs:sequence>
   </xs:complexType>
 
+  <xs:simpleType name="RadarMeasurementType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="range"/>
+      <xs:enumeration value="range_az_el"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:element name="Sensors">
     <xs:complexType>
       <xs:sequence>
@@ -39,6 +46,25 @@
 
               <xs:element name="BandwidthHz" type="PositiveDouble" minOccurs="0"/>
               <xs:element name="Beamwidth3dBDeg" type="Beamwidth2DType" minOccurs="0"/>
+
+              <xs:element name="MeasurementModel" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Radar" minOccurs="0">
+                      <xs:complexType>
+                        <xs:sequence>
+                          <xs:element name="ReferenceRangeMeters" type="NonNegativeDouble"/>
+                          <xs:element name="ReferenceSnrDb" type="xs:double"/>
+                          <xs:element name="ReferenceRcsM2" type="NonNegativeDouble"/>
+                          <xs:element name="DetectionProbability" type="xs:double" minOccurs="0"/>
+                          <xs:element name="FalseAlarmCountPerScan" type="NonNegativeInt" minOccurs="0"/>
+                          <xs:element name="MeasurementType" type="RadarMeasurementType"/>
+                        </xs:sequence>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
 
               <xs:element name="ScanVolume" minOccurs="0">
                 <xs:complexType>

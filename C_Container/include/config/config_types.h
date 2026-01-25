@@ -143,6 +143,32 @@ inline SensorType SensorTypeFromText(const std::string& s) {
   return SensorType::UNKNOWN;
 }
 
+enum class RadarMeasurementType {
+  RANGE_ONLY,
+  RANGE_AZ_EL,
+  UNKNOWN
+};
+
+inline RadarMeasurementType RadarMeasurementTypeFromText(const std::string& s) {
+  if (s == "range") return RadarMeasurementType::RANGE_ONLY;
+  if (s == "range_az_el") return RadarMeasurementType::RANGE_AZ_EL;
+  return RadarMeasurementType::UNKNOWN;
+}
+
+struct RadarMeasurementCfg {
+  RadarMeasurementType type = RadarMeasurementType::UNKNOWN;
+  double ref_range_m = 0.0;
+  double ref_snr_db = 0.0;
+  double ref_rcs_m2 = 0.0;
+  double detection_prob = 1.0;
+  std::uint32_t false_alarm_count = 0;
+};
+
+struct MeasurementModelCfg {
+  bool has_radar = false;
+  RadarMeasurementCfg radar{};
+};
+
 struct ScanFrustumCfg {
   // Degrees and meters; interpreted in the declared ScanVolume frame.
   double az_min_deg = 0.0;
@@ -164,6 +190,7 @@ struct SensorCfg {
   double bandwidth_hz = 0.0;
   double beamwidth_3db_az_deg = 0.0;
   double beamwidth_3db_el_deg = 0.0;
+  MeasurementModelCfg meas_model{};
   ScanVolumeCfg scan{};
   double scan_rate_hz = 0.0;  // schedule hint
 

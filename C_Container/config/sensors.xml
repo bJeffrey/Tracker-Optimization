@@ -6,6 +6,17 @@
     <BandwidthHz>20000000</BandwidthHz>
     <Beamwidth3dBDeg azimuth="2.0" elevation="2.0"/>
 
+    <MeasurementModel>
+      <Radar>
+        <ReferenceRangeMeters>100000</ReferenceRangeMeters>
+        <ReferenceSnrDb>20</ReferenceSnrDb>
+        <ReferenceRcsM2>1.0</ReferenceRcsM2>
+        <DetectionProbability>0.95</DetectionProbability>
+        <FalseAlarmCountPerScan>50</FalseAlarmCountPerScan>
+        <MeasurementType>range_az_el</MeasurementType>
+      </Radar>
+    </MeasurementModel>
+
     <!-- Scan volume defined relative to ownship; used to query candidate tracks -->
     <ScanVolume>
       <Frame>OWNERSHIP_BODY</Frame>

@@ -249,6 +249,25 @@ static SensorsCfg parse_sensors(const std::string& sensors_xml,
       s.beamwidth_3db_az_deg = child_attr_double(n, "Beamwidth3dBDeg", "azimuth", 0.0);
       s.beamwidth_3db_el_deg = child_attr_double(n, "Beamwidth3dBDeg", "elevation", 0.0);
 
+    // MeasurementModel (optional)
+    if (xmlNodePtr mm = find_child(n, "MeasurementModel")) {
+      if (xmlNodePtr radar = find_child(mm, "Radar")) {
+        s.meas_model.has_radar = true;
+        s.meas_model.radar.ref_range_m =
+          child_double(radar, "ReferenceRangeMeters", 0.0);
+        s.meas_model.radar.ref_snr_db =
+          child_double(radar, "ReferenceSnrDb", 0.0);
+        s.meas_model.radar.ref_rcs_m2 =
+          child_double(radar, "ReferenceRcsM2", 0.0);
+        s.meas_model.radar.detection_prob =
+          child_double(radar, "DetectionProbability", 1.0);
+        s.meas_model.radar.false_alarm_count =
+          static_cast<std::uint32_t>(child_u64(radar, "FalseAlarmCountPerScan", 0));
+        s.meas_model.radar.type =
+          RadarMeasurementTypeFromText(child_text(radar, "MeasurementType"));
+      }
+    }
+
     // ScanVolume (optional)
     if (xmlNodePtr scan = find_child(n, "ScanVolume")) {
       s.scan.frame = child_text(scan, "Frame");
