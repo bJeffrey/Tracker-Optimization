@@ -322,7 +322,10 @@ endif()
 # ------------------------------
 # Demo executable
 # ------------------------------
-add_executable(demo src/main.cpp)
+add_executable(demo
+  src/main.cpp
+  src/pipeline/demo_pipeline.cpp
+)
 target_include_directories(demo PRIVATE ${TRACKER_PUBLIC_INCLUDE_DIRS})
 
 # Link plugin framework (always)
