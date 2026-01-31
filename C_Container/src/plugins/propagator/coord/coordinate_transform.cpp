@@ -104,6 +104,46 @@ void EcefToEnuPoint(double x_ecef,
   u_m = up.x * d.x + up.y * d.y + up.z * d.z;
 }
 
+void EcefToEnuBatch(const EcefBatch& ecef,
+                    const cfg::Ownship& ownship,
+                    AerRadBatch& out) {
+  const std::size_t n = ecef.n;
+  out.resize(n);
+  if (n == 0) return;
+  ecef.assert_sizes();
+
+  const Vec3 own{ownship.pos_x, ownship.pos_y, ownship.pos_z};
+  Vec3 east, north, up;
+  enu_basis_from_ecef(own, east, north, up);
+
+  const std::size_t cols = n;
+  std::vector<double> delta(3 * cols, 0.0);
+  std::vector<double> enu(3 * cols, 0.0);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    delta[0 * cols + i] = ecef.x[i] - own.x;
+    delta[1 * cols + i] = ecef.y[i] - own.y;
+    delta[2 * cols + i] = ecef.z[i] - own.z;
+  }
+
+  double basis[9] = {
+    east.x,  east.y,  east.z,
+    north.x, north.y, north.z,
+    up.x,    up.y,    up.z
+  };
+
+  la::MatrixView A{basis, 3, 3, 3};
+  la::MatrixView B{delta.data(), 3, cols, cols};
+  la::MatrixView C{enu.data(), 3, cols, cols};
+  la::gemm(false, false, 1.0, A, B, 0.0, C);
+
+  for (std::size_t i = 0; i < n; ++i) {
+    out.az_rad[i] = enu[0 * cols + i]; // reuse az_rad as E
+    out.el_rad[i] = enu[1 * cols + i]; // reuse el_rad as N
+    out.r_m[i] = enu[2 * cols + i];    // reuse r_m as U
+  }
+}
+
 void AerToEnuPoint(double az_rad,
                    double el_rad,
                    double r_m,

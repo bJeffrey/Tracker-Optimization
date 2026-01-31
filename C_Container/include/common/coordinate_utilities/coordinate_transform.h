@@ -35,6 +35,11 @@ void EcefToEnuPoint(double x_ecef,
                     double& n_m,
                     double& u_m);
 
+// Batch ECEF -> ENU using shared basis (outputs ENU in meters).
+void EcefToEnuBatch(const EcefBatch& ecef,
+                    const cfg::Ownship& ownship,
+                    AerRadBatch& out);
+
 void AerToEnuPoint(double az_rad,
                    double el_rad,
                    double r_m,

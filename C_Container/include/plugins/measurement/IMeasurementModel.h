@@ -20,6 +20,8 @@ struct SensorMeta {
 
 struct RadarMeasurement {
   std::uint64_t id = 0;
+  std::uint32_t truth_index = 0;
+  bool has_truth = false;
   double range_m = 0.0;
   double az_rad = 0.0;
   double el_rad = 0.0;
