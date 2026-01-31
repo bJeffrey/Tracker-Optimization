@@ -336,6 +336,31 @@ static GatingAssociationCfg parse_gating_association(void* doc) {
   g.course_gates.side_x_m = parse_attr("x");
   g.course_gates.side_y_m = parse_attr("y");
   g.course_gates.side_z_m = parse_attr("z");
+
+  g.assoc_decision.elapsed_budget_frac =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/ElapsedBudgetFrac",
+                    g.assoc_decision.elapsed_budget_frac);
+  g.assoc_decision.avg_pairs_low =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/AvgPairsPerMeasLow",
+                    g.assoc_decision.avg_pairs_low);
+  g.assoc_decision.ambiguous_frac_low =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/AmbiguousFracLow",
+                    g.assoc_decision.ambiguous_frac_low);
+  g.assoc_decision.avg_pairs_high =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/AvgPairsPerMeasHigh",
+                    g.assoc_decision.avg_pairs_high);
+  g.assoc_decision.ambiguous_frac_high =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/AmbiguousFracHigh",
+                    g.assoc_decision.ambiguous_frac_high);
+  g.assoc_decision.pmbm_elapsed_budget_frac =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/PmbmElapsedBudgetFrac",
+                    g.assoc_decision.pmbm_elapsed_budget_frac);
+  g.assoc_decision.pmbm_cpu_max =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/PmbmCpuMax",
+                    g.assoc_decision.pmbm_cpu_max);
+  g.assoc_decision.false_alarm_high =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/FalseAlarmHigh",
+                    g.assoc_decision.false_alarm_high);
   return g;
 }
 

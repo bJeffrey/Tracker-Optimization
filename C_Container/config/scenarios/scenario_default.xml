@@ -5,7 +5,7 @@
 
     <Refs baseDir="..">
       <Ownship href="entities/ownship_static.xml"/>
-      <Targets sourceType="generator" href="targets/targets_gen_1m_ca9.xml" usePrepopulatedDb="true"/>
+      <Targets sourceType="generator" href="targets/targets_gen_1m_ca9.xml" usePrepopulatedDb="false"/>
     </Refs>
 
     <LoadPolicy>

@@ -65,6 +65,20 @@
           <xs:complexType>
             <xs:sequence>
               <xs:element name="Method" type="AssocMethodType" minOccurs="0"/>
+              <xs:element name="Decision" minOccurs="0">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="ElapsedBudgetFrac" type="NonNegativeDouble" minOccurs="0"/>
+                    <xs:element name="AvgPairsPerMeasLow" type="NonNegativeDouble" minOccurs="0"/>
+                    <xs:element name="AmbiguousFracLow" type="Fraction01" minOccurs="0"/>
+                    <xs:element name="AvgPairsPerMeasHigh" type="NonNegativeDouble" minOccurs="0"/>
+                    <xs:element name="AmbiguousFracHigh" type="Fraction01" minOccurs="0"/>
+                    <xs:element name="PmbmElapsedBudgetFrac" type="NonNegativeDouble" minOccurs="0"/>
+                    <xs:element name="PmbmCpuMax" type="Fraction01" minOccurs="0"/>
+                    <xs:element name="FalseAlarmHigh" type="Fraction01" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
             </xs:sequence>
           </xs:complexType>
         </xs:element>

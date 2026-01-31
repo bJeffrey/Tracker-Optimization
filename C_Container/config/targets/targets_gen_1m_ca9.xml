@@ -6,7 +6,7 @@
   <!-- Spatial distribution: mixture of background + local bubble around ownship -->
   <Mixture>
 
-    <Background fraction="0.95">
+    <Background fraction="0.0">
       <Model type="ecef_box">
         <EcefBox>
           <MinMeters x="-6000000" y="-6000000" z="-6000000"/>
@@ -15,12 +15,12 @@
       </Model>
     </Background>
 
-    <Local fraction="0.05">
+    <Local fraction="1.0">
       <Model type="ecef_box">
         <Center>ownship</Center>
         <EcefBox>
-          <MinMeters x="-300000" y="-300000" z="-18000"/>
-          <MaxMeters x="300000"  y="300000"  z="18000"/>
+          <MinMeters x="-50000" y="-50000" z="-18000"/>
+          <MaxMeters x="50000"  y="50000"  z="18000"/>
         </EcefBox>
       </Model>
     </Local>

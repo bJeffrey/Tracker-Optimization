@@ -221,6 +221,16 @@ struct CourseGatesCfg {
 
 struct GatingAssociationCfg {
   CourseGatesCfg course_gates{};
+  struct AssocDecisionCfg {
+    double elapsed_budget_frac = 0.7;
+    double avg_pairs_low = 1.5;
+    double ambiguous_frac_low = 0.2;
+    double avg_pairs_high = 4.0;
+    double ambiguous_frac_high = 0.5;
+    double pmbm_elapsed_budget_frac = 0.5;
+    double pmbm_cpu_max = 0.7;
+    double false_alarm_high = 0.3;
+  } assoc_decision{};
 };
 
 // ------------------------------
