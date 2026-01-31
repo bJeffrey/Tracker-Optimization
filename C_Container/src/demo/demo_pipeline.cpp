@@ -21,6 +21,7 @@
 // Unified include surface
 #include "tracker_api/demo_pipeline.h"
 #include "tracker.h"
+#include "plugins/propagator/la.h"
 #include "plugins/database/course_gates.h"
 #include "common/coordinate_utilities/coordinate_transform.h"
 #include "plugins/measurement/IMeasurementModel.h"
@@ -223,6 +224,12 @@ LogLevel current_log_level() {
 
 bool should_log(LogLevel level) {
   return static_cast<int>(level) >= static_cast<int>(current_log_level());
+}
+
+bool env_log_enabled(const char* name, bool def = true) {
+  const char* v = std::getenv(name);
+  if (!v) return def;
+  return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE");
 }
 
 std::string assoc_mode_name(AssocMode mode) {
@@ -744,12 +751,14 @@ void stage_measurement_generation(PipelineState& state, double t_s) {
     "truth_e,truth_n,truth_u,track_e,track_n,track_u,meas_e,meas_n,meas_u,"
     "d_truth_track,d_truth_meas,d_track_meas\n";
 
-  if (ensure_output_dir(state.cli.output_dir)) {
+  if (env_log_enabled("TRACKER_LOG_TRACK_TRUTH_MEAS", true) &&
+      ensure_output_dir(state.cli.output_dir)) {
     if (state.stats.scan_count % ttm_log_every_n != 0) {
       return;
     }
     // --- Coarse diagnostic: track ENU bounds vs gate grid bounds
-    if (state.scan.course_gates.enabled && state.scan.gate_grid.enabled) {
+    if (env_log_enabled("TRACKER_LOG_TRACK_GATE_BOUNDS", true) &&
+        state.scan.course_gates.enabled && state.scan.gate_grid.enabled) {
       const double nan = std::numeric_limits<double>::quiet_NaN();
       coord::AerRadBatch track_enu_diag;
       coord::EcefBatch track_ecef_diag;
@@ -939,6 +948,9 @@ void stage_measurement_generation(PipelineState& state, double t_s) {
     }
   }
 
+  if (!env_log_enabled("TRACKER_LOG_SENSOR_COURSE_GATES", true)) {
+    return;
+  }
   if (!ensure_output_dir(state.cli.output_dir)) {
     return;
   }
@@ -1029,7 +1041,45 @@ void stage_fine_gating(PipelineState&, const trk::IdList&, double) {}
 /**
  * @brief Placeholder for association stage.
  */
-void stage_association(PipelineState&, const trk::IdList&, double) {}
+void stage_association(PipelineState& state, const trk::IdList&, double) {
+  if (state.candidate_pairs.empty() || state.meas_batch.measurements.empty()) return;
+
+  // Temporary NN: pick closest track in ENU for each measurement.
+  coord::AerRadBatch track_enu;
+  coord::EcefBatch track_ecef;
+  track_ecef.n = state.tb.n_tracks;
+  track_ecef.x = state.tb.pos_x;
+  track_ecef.y = state.tb.pos_y;
+  track_ecef.z = state.tb.pos_z;
+  coord::EcefToEnuBatch(track_ecef, state.cfg->ownship, track_enu);
+
+  const std::size_t mcount = state.meas_batch.measurements.size();
+  std::vector<double> best_cost(mcount, std::numeric_limits<double>::infinity());
+  std::vector<std::uint64_t> best_track(mcount, std::numeric_limits<std::uint64_t>::max());
+
+  std::vector<double> meas_e(mcount), meas_n(mcount), meas_u(mcount);
+  for (std::size_t i = 0; i < mcount; ++i) {
+    const auto& m = state.meas_batch.measurements[i];
+    coord::AerToEnuPoint(m.az_rad, m.el_rad, m.range_m, meas_e[i], meas_n[i], meas_u[i]);
+  }
+
+  for (const auto& p : state.candidate_pairs) {
+    if (p.meas_index >= mcount) continue;
+    const std::size_t ti = static_cast<std::size_t>(p.track_id);
+    if (ti >= track_enu.n) continue;
+    const double de = track_enu.az_rad[ti] - meas_e[p.meas_index];
+    const double dn = track_enu.el_rad[ti] - meas_n[p.meas_index];
+    const double du = track_enu.r_m[ti] - meas_u[p.meas_index];
+    const double cost = de * de + dn * dn + du * du;
+    if (cost < best_cost[p.meas_index]) {
+      best_cost[p.meas_index] = cost;
+      best_track[p.meas_index] = p.track_id;
+    }
+  }
+
+  // Temporary: no persistence yet; this just exercises NN association.
+  (void)best_track;
+}
 /**
  * @brief Placeholder for filter update stage.
  */
@@ -1426,7 +1476,8 @@ void process_scan_tick(PipelineState& state,
     assoc_log_init = true;
     assoc_header_written = false;
   }
-  if (ensure_output_dir(state.cli.output_dir)) {
+  if (env_log_enabled("TRACKER_LOG_ASSOC_MODE", true) &&
+      ensure_output_dir(state.cli.output_dir)) {
     std::ofstream out(assoc_log_path, assoc_header_written ? std::ios::app : std::ios::trunc);
     if (out) {
       if (!assoc_header_written) {
