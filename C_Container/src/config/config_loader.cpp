@@ -361,6 +361,9 @@ static GatingAssociationCfg parse_gating_association(void* doc) {
   g.assoc_decision.false_alarm_high =
     xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/FalseAlarmHigh",
                     g.assoc_decision.false_alarm_high);
+  g.assoc_decision.cpu_hard_max =
+    xmlu::GetDouble(doc, "GatingAssociation/Association/Decision/CpuHardMax",
+                    g.assoc_decision.cpu_hard_max);
   return g;
 }
 

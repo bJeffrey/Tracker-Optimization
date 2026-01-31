@@ -30,6 +30,7 @@
       <PmbmElapsedBudgetFrac>0.5</PmbmElapsedBudgetFrac>
       <PmbmCpuMax>0.7</PmbmCpuMax>
       <FalseAlarmHigh>0.3</FalseAlarmHigh>
+      <CpuHardMax>0.9</CpuHardMax>
     </Decision>
   </Association>
 

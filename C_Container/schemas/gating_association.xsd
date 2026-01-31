@@ -76,6 +76,7 @@
                     <xs:element name="PmbmElapsedBudgetFrac" type="NonNegativeDouble" minOccurs="0"/>
                     <xs:element name="PmbmCpuMax" type="Fraction01" minOccurs="0"/>
                     <xs:element name="FalseAlarmHigh" type="Fraction01" minOccurs="0"/>
+                    <xs:element name="CpuHardMax" type="Fraction01" minOccurs="0"/>
                   </xs:sequence>
                 </xs:complexType>
               </xs:element>

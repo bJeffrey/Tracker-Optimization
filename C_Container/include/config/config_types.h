@@ -230,6 +230,7 @@ struct GatingAssociationCfg {
     double pmbm_elapsed_budget_frac = 0.5;
     double pmbm_cpu_max = 0.7;
     double false_alarm_high = 0.3;
+    double cpu_hard_max = 0.9;
   } assoc_decision{};
 };
 
