@@ -3,7 +3,7 @@
   <CourseGates>
     <Enabled>true</Enabled>
     <RadiusMeters>50000</RadiusMeters>
-    <SurfaceGateSideMeters x="396" y="396" z="5236.52"/>
+    <SurfaceGateSideMeters x="253.44" y="253.44" z="3351.38"/>
   </CourseGates>
 
   <CoarseGating>

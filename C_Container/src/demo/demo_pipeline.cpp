@@ -25,6 +25,8 @@
 #include "plugins/database/course_gates.h"
 #include "common/coordinate_utilities/coordinate_transform.h"
 #include "plugins/measurement/IMeasurementModel.h"
+#include "plugins/measurement/aer_prediction.h"
+#include "plugins/gating/aer_sigma_gate.h"
 
 #include <algorithm>
 #include <chrono>
@@ -37,14 +39,17 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <condition_variable>
 
 namespace fs = std::filesystem;
 
@@ -106,6 +111,24 @@ struct RunStats {
   double finalize_begin_acc_s = 0.0;
   double finalize_apply_acc_s = 0.0;
   double finalize_commit_acc_s = 0.0;
+
+  double meas_gen_acc_s = 0.0;
+  double candidate_acc_s = 0.0;
+  double coarse_gate_acc_s = 0.0;
+  double fine_gate_acc_s = 0.0;
+  double assoc_acc_s = 0.0;
+  double filter_acc_s = 0.0;
+  double maintenance_acc_s = 0.0;
+  double scan_tick_acc_s = 0.0;
+  double model_update_acc_s = 0.0;
+  double propagate_acc_s = 0.0;
+  std::size_t dt_ticks = 0;
+  double gate_used_acc_s = 0.0;
+  double candidate_pairs_acc_s = 0.0;
+  double assoc_telemetry_acc_s = 0.0;
+  double prefetch_enqueue_acc_s = 0.0;
+  double candidate_cache_copy_acc_s = 0.0;
+  double assoc_log_acc_s = 0.0;
 };
 
 /**
@@ -134,17 +157,44 @@ struct ScanContext {
     std::size_t count_e = 0;
     std::size_t count_n = 0;
     std::vector<int> map; // index -> gate_index, -1 if no gate
+    std::vector<int> gate_to_map; // gate_index -> map index, -1 if no gate
+  };
+  struct PrefetchWorker {
+    std::thread thread;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool stop = false;
+    bool pending = false;
+    double t_s = 0.0;
+    idx::EcefAabb aabb{};
+  };
+  struct CandidateWorker {
+    std::thread thread;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool stop = false;
+    bool pending = false;
+    std::vector<std::uint8_t> gate_used;
   };
   GateGrid gate_grid{};
   std::vector<trk::IdList> gate_candidates{};
+  std::vector<trk::IdList> gate_candidates_cache{};
+  std::mutex gate_candidates_mutex;
+  bool gate_candidates_ready = false;
   std::vector<std::uint8_t> gate_used{};
   idx::SpatialIndexConfig icfg{};
   std::unique_ptr<db::ITrackDatabase> track_db;
+  mutable std::mutex db_mutex;
   trk::IdList hot_ids;
+  std::mutex hot_mutex;
   double hot_prefetch_min_s = 0.0;
   double hot_prefetch_window_s = 0.0;
   double last_prefetch_t_s = 0.0;
   bool hot_prefetch_cadence_enabled = false;
+  bool prefetch_thread_enabled = false;
+  PrefetchWorker prefetch_worker{};
+  bool candidate_thread_enabled = false;
+  CandidateWorker candidate_worker{};
   trk::TrackKinematicsBatch tbm;
   trk::ModelBuckets buckets;
   trk::MotionModel_CA9 model_ca;
@@ -182,6 +232,112 @@ struct PipelineState {
   };
   std::vector<CandidatePair> candidate_pairs;
 };
+
+void start_prefetch_worker(PipelineState& state) {
+  if (!state.scan.prefetch_thread_enabled || !state.scan.track_db) return;
+  state.scan.prefetch_worker.thread = std::thread([&state]() {
+    auto& scan = state.scan;
+    while (true) {
+      std::unique_lock<std::mutex> lock(scan.prefetch_worker.mutex);
+      scan.prefetch_worker.cv.wait(lock, [&]() {
+        return scan.prefetch_worker.stop || scan.prefetch_worker.pending;
+      });
+      if (scan.prefetch_worker.stop) break;
+      const double t_s = scan.prefetch_worker.t_s;
+      const idx::EcefAabb aabb = scan.prefetch_worker.aabb;
+      scan.prefetch_worker.pending = false;
+      lock.unlock();
+
+      if (!scan.hot_prefetch_cadence_enabled) continue;
+      bool do_prefetch = true;
+      if (scan.hot_prefetch_cadence_enabled) {
+        const double window_s =
+          (scan.hot_prefetch_window_s > 0.0)
+            ? scan.hot_prefetch_window_s
+            : scan.hot_prefetch_min_s;
+        if (window_s > 0.0) {
+          const double elapsed = t_s - scan.last_prefetch_t_s;
+          const double remaining = window_s - elapsed;
+          do_prefetch = (remaining <= scan.hot_prefetch_min_s);
+        }
+      }
+      if (!do_prefetch) continue;
+
+      trk::IdList hot_ids;
+      {
+        std::lock_guard<std::mutex> db_lock(scan.db_mutex);
+        hot_ids = scan.track_db->PrefetchHot(aabb);
+      }
+      {
+        std::lock_guard<std::mutex> hot_lock(scan.hot_mutex);
+        scan.hot_ids = std::move(hot_ids);
+      }
+      scan.last_prefetch_t_s = t_s;
+    }
+  });
+}
+
+void stop_prefetch_worker(PipelineState& state) {
+  if (!state.scan.prefetch_thread_enabled) return;
+  {
+    std::lock_guard<std::mutex> lock(state.scan.prefetch_worker.mutex);
+    state.scan.prefetch_worker.stop = true;
+    state.scan.prefetch_worker.pending = true;
+  }
+  state.scan.prefetch_worker.cv.notify_all();
+  if (state.scan.prefetch_worker.thread.joinable()) {
+    state.scan.prefetch_worker.thread.join();
+  }
+}
+
+void start_candidate_worker(PipelineState& state) {
+  if (!state.scan.candidate_thread_enabled || !state.scan.track_db) return;
+  state.scan.candidate_worker.thread = std::thread([&state]() {
+    auto& scan = state.scan;
+    while (true) {
+      std::vector<std::uint8_t> gate_used;
+      {
+        std::unique_lock<std::mutex> lock(scan.candidate_worker.mutex);
+        scan.candidate_worker.cv.wait(lock, [&]() {
+          return scan.candidate_worker.stop || scan.candidate_worker.pending;
+        });
+        if (scan.candidate_worker.stop) break;
+        gate_used = scan.candidate_worker.gate_used;
+        scan.candidate_worker.pending = false;
+      }
+
+      if (scan.course_gates.gates.empty()) continue;
+      const std::size_t gate_count = scan.course_gates.gates.size();
+      std::vector<trk::IdList> local_candidates(gate_count);
+      {
+        std::lock_guard<std::mutex> db_lock(scan.db_mutex);
+        for (std::size_t g = 0; g < gate_count; ++g) {
+          if (g >= gate_used.size() || !gate_used[g]) continue;
+          local_candidates[g] = scan.track_db->QueryAabb(scan.course_gates.gates[g]);
+        }
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(scan.gate_candidates_mutex);
+        scan.gate_candidates_cache = std::move(local_candidates);
+        scan.gate_candidates_ready = true;
+      }
+    }
+  });
+}
+
+void stop_candidate_worker(PipelineState& state) {
+  if (!state.scan.candidate_thread_enabled) return;
+  {
+    std::lock_guard<std::mutex> lock(state.scan.candidate_worker.mutex);
+    state.scan.candidate_worker.stop = true;
+    state.scan.candidate_worker.pending = true;
+  }
+  state.scan.candidate_worker.cv.notify_all();
+  if (state.scan.candidate_worker.thread.joinable()) {
+    state.scan.candidate_worker.thread.join();
+  }
+}
 
 enum class LogLevel : int {
   TRACE = 0,
@@ -1056,6 +1212,7 @@ void stage_association(PipelineState& state, const trk::IdList&, double) {
   const std::size_t mcount = state.meas_batch.measurements.size();
   std::vector<double> best_cost(mcount, std::numeric_limits<double>::infinity());
   std::vector<std::uint64_t> best_track(mcount, std::numeric_limits<std::uint64_t>::max());
+  std::vector<std::uint32_t> kept_pairs_per_meas(mcount, 0);
 
   std::vector<double> meas_e(mcount), meas_n(mcount), meas_u(mcount);
   for (std::size_t i = 0; i < mcount; ++i) {
@@ -1063,14 +1220,23 @@ void stage_association(PipelineState& state, const trk::IdList&, double) {
     coord::AerToEnuPoint(m.az_rad, m.el_rad, m.range_m, meas_e[i], meas_n[i], meas_u[i]);
   }
 
+  // AER prediction for tracks (ECEF->ENU->AER) and sigma gating per measurement.
+  const cfg::SensorCfg& sensor = *state.scan.sensor;
+  const meas::RadarSigmas sigmas = meas::RadarSigmasFromCfg(sensor);
+  const double k_sigma = 3.0;
+
   for (const auto& p : state.candidate_pairs) {
     if (p.meas_index >= mcount) continue;
     const std::size_t ti = static_cast<std::size_t>(p.track_id);
     if (ti >= track_enu.n) continue;
-    const double de = track_enu.az_rad[ti] - meas_e[p.meas_index];
-    const double dn = track_enu.el_rad[ti] - meas_n[p.meas_index];
-    const double du = track_enu.r_m[ti] - meas_u[p.meas_index];
-    const double cost = de * de + dn * dn + du * du;
+    const meas::AerPred pred = meas::PredictAerFromEnu(
+      track_enu.az_rad[ti], track_enu.el_rad[ti], track_enu.r_m[ti]);
+    const auto& m = state.meas_batch.measurements[p.meas_index];
+    const meas::AerPred meas_pred{m.range_m, m.az_rad, m.el_rad};
+    if (!gating::PassSigmaGate(meas_pred, pred, sigmas, k_sigma)) continue;
+
+    ++kept_pairs_per_meas[p.meas_index];
+    const double cost = gating::AerResidualCost(meas_pred, pred);
     if (cost < best_cost[p.meas_index]) {
       best_cost[p.meas_index] = cost;
       best_track[p.meas_index] = p.track_id;
@@ -1079,6 +1245,7 @@ void stage_association(PipelineState& state, const trk::IdList&, double) {
 
   // Temporary: no persistence yet; this just exercises NN association.
   (void)best_track;
+  (void)kept_pairs_per_meas;
 }
 /**
  * @brief Placeholder for filter update stage.
@@ -1165,6 +1332,7 @@ bool setup_scan_context(PipelineState& state) {
         state.scan.gate_grid.count_e = count_e;
         state.scan.gate_grid.count_n = count_n;
         state.scan.gate_grid.map.assign(count_e * count_n, -1);
+        state.scan.gate_grid.gate_to_map.assign(state.scan.course_gates.gates.size(), -1);
 
         std::size_t gate_idx = 0;
         std::size_t i = 0;
@@ -1175,6 +1343,9 @@ bool setup_scan_context(PipelineState& state) {
             const std::size_t map_idx = j * count_e + i;
             if (map_idx < state.scan.gate_grid.map.size()) {
               state.scan.gate_grid.map[map_idx] = static_cast<int>(gate_idx++);
+              if (gate_idx - 1 < state.scan.gate_grid.gate_to_map.size()) {
+                state.scan.gate_grid.gate_to_map[gate_idx - 1] = static_cast<int>(map_idx);
+              }
             }
           }
         }
@@ -1293,6 +1464,17 @@ bool setup_scan_context(PipelineState& state) {
     }
   }
 
+  state.scan.prefetch_thread_enabled =
+    (store.mode == "HOT_PLUS_WARM" && state.scan.hot_prefetch_cadence_enabled);
+  if (state.scan.prefetch_thread_enabled) {
+    start_prefetch_worker(state);
+  }
+  state.scan.candidate_thread_enabled =
+    (store.mode == "HOT_PLUS_WARM" && state.scan.course_gates.enabled);
+  if (state.scan.candidate_thread_enabled) {
+    start_candidate_worker(state);
+  }
+
   if (should_log(LogLevel::INFO)) {
     std::cout << "Scan-driven coarse query (loop):\n";
     std::cout << "  sensor.id=" << sensor.id << " frame=" << sensor.scan.frame
@@ -1343,31 +1525,51 @@ void process_scan_tick(PipelineState& state,
   ++state.stats.scan_count;
 
   if (state.cfg->store_profile.mode == "HOT_PLUS_WARM") {
-    bool do_prefetch = true;
-    if (state.scan.hot_prefetch_cadence_enabled) {
-      const double window_s =
-        (state.scan.hot_prefetch_window_s > 0.0)
-          ? state.scan.hot_prefetch_window_s
-          : state.scan.hot_prefetch_min_s;
-      if (window_s > 0.0) {
-        const double elapsed = t_s - state.scan.last_prefetch_t_s;
-        const double remaining = window_s - elapsed;
-        do_prefetch = (remaining <= state.scan.hot_prefetch_min_s);
+    if (state.scan.prefetch_thread_enabled) {
+      const auto t_prefetch0 = std::chrono::high_resolution_clock::now();
+      {
+        std::lock_guard<std::mutex> lock(state.scan.prefetch_worker.mutex);
+        state.scan.prefetch_worker.t_s = t_s;
+        state.scan.prefetch_worker.aabb = state.scan.scan_aabb;
+        state.scan.prefetch_worker.pending = true;
       }
-    }
-    if (do_prefetch) {
-      state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
-      state.scan.last_prefetch_t_s = t_s;
+      state.scan.prefetch_worker.cv.notify_one();
+      const auto t_prefetch1 = std::chrono::high_resolution_clock::now();
+      state.stats.prefetch_enqueue_acc_s +=
+        std::chrono::duration<double>(t_prefetch1 - t_prefetch0).count();
+    } else {
+      bool do_prefetch = true;
+      if (state.scan.hot_prefetch_cadence_enabled) {
+        const double window_s =
+          (state.scan.hot_prefetch_window_s > 0.0)
+            ? state.scan.hot_prefetch_window_s
+            : state.scan.hot_prefetch_min_s;
+        if (window_s > 0.0) {
+          const double elapsed = t_s - state.scan.last_prefetch_t_s;
+          const double remaining = window_s - elapsed;
+          do_prefetch = (remaining <= state.scan.hot_prefetch_min_s);
+        }
+      }
+      if (do_prefetch) {
+        std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+        state.scan.hot_ids = state.scan.track_db->PrefetchHot(state.scan.scan_aabb);
+        state.scan.last_prefetch_t_s = t_s;
+      }
     }
   }
 
   const auto t0 = std::chrono::high_resolution_clock::now();
-  state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
+  {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+    state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
+  }
   const auto t1 = std::chrono::high_resolution_clock::now();
 
+  const auto t_meas0 = std::chrono::high_resolution_clock::now();
   stage_measurement_generation(state, t_s);
+  const auto t_meas1 = std::chrono::high_resolution_clock::now();
 
-  const auto t1q = std::chrono::high_resolution_clock::now();
+  const auto t1q = t_meas1;
   // Candidate track indices for this scan.
   trk::IdList ids;
   state.candidate_pairs.clear();
@@ -1375,20 +1577,83 @@ void process_scan_tick(PipelineState& state,
       !state.meas_batch.measurements.empty()) {
     const std::size_t gate_count = state.scan.course_gates.gates.size();
     state.scan.gate_used.assign(gate_count, 0);
+    const cfg::SensorCfg& sensor = *state.scan.sensor;
+    const meas::RadarSigmas sigmas = meas::RadarSigmasFromCfg(sensor);
+    const double k_sigma = 3.0;
+    const double gate_half_e = 0.5 * state.cfg->gating_assoc.course_gates.side_x_m;
+    const double gate_half_n = 0.5 * state.cfg->gating_assoc.course_gates.side_y_m;
+
+    const auto t_gate_used0 = std::chrono::high_resolution_clock::now();
     for (const auto& m : state.meas_batch.measurements) {
       if (m.gate_index < 0) continue;
       const std::size_t g = static_cast<std::size_t>(m.gate_index);
       if (g < state.scan.gate_used.size()) state.scan.gate_used[g] = 1;
+
+      const double noise_e = k_sigma * m.range_m * sigmas.sigma_az;
+      const double noise_n = k_sigma * m.range_m * sigmas.sigma_el;
+      const int expand_e = (gate_half_e > 0.0) ? static_cast<int>(std::ceil(noise_e / gate_half_e)) : 0;
+      const int expand_n = (gate_half_n > 0.0) ? static_cast<int>(std::ceil(noise_n / gate_half_n)) : 0;
+      if (!state.scan.gate_grid.enabled) continue;
+      if (g >= state.scan.gate_grid.gate_to_map.size()) continue;
+      const int map_idx0 = state.scan.gate_grid.gate_to_map[g];
+      if (map_idx0 < 0) continue;
+      const std::size_t count_e = state.scan.gate_grid.count_e;
+      const std::size_t count_n = state.scan.gate_grid.count_n;
+      const std::size_t i0 = static_cast<std::size_t>(static_cast<std::size_t>(map_idx0) % count_e);
+      const std::size_t j0 = static_cast<std::size_t>(static_cast<std::size_t>(map_idx0) / count_e);
+
+      for (int dj = -expand_n; dj <= expand_n; ++dj) {
+        const long jj = static_cast<long>(j0) + dj;
+        if (jj < 0 || jj >= static_cast<long>(count_n)) continue;
+        for (int di = -expand_e; di <= expand_e; ++di) {
+          const long ii = static_cast<long>(i0) + di;
+          if (ii < 0 || ii >= static_cast<long>(count_e)) continue;
+          const std::size_t map_idx = static_cast<std::size_t>(jj) * count_e +
+                                      static_cast<std::size_t>(ii);
+          if (map_idx >= state.scan.gate_grid.map.size()) continue;
+          const int gidx = state.scan.gate_grid.map[map_idx];
+          if (gidx >= 0 && static_cast<std::size_t>(gidx) < state.scan.gate_used.size()) {
+            state.scan.gate_used[static_cast<std::size_t>(gidx)] = 1;
+          }
+        }
+      }
+    }
+    const auto t_gate_used1 = std::chrono::high_resolution_clock::now();
+    state.stats.gate_used_acc_s += std::chrono::duration<double>(t_gate_used1 - t_gate_used0).count();
+
+    if (state.scan.candidate_thread_enabled) {
+      {
+        std::lock_guard<std::mutex> lock(state.scan.candidate_worker.mutex);
+        state.scan.candidate_worker.gate_used = state.scan.gate_used;
+        state.scan.candidate_worker.pending = true;
+      }
+      state.scan.candidate_worker.cv.notify_one();
     }
 
-    state.scan.gate_candidates.resize(gate_count);
-    for (std::size_t g = 0; g < gate_count; ++g) {
-      if (!state.scan.gate_used[g]) {
-        state.scan.gate_candidates[g].clear();
-        continue;
+    bool used_cached = false;
+    if (state.scan.candidate_thread_enabled) {
+      const auto t_cache0 = std::chrono::high_resolution_clock::now();
+      std::lock_guard<std::mutex> lock(state.scan.gate_candidates_mutex);
+      if (state.scan.gate_candidates_ready &&
+          state.scan.gate_candidates_cache.size() == gate_count) {
+        state.scan.gate_candidates = state.scan.gate_candidates_cache;
+        used_cached = true;
       }
-      state.scan.gate_candidates[g] =
-        state.scan.track_db->QueryAabb(state.scan.course_gates.gates[g]);
+      const auto t_cache1 = std::chrono::high_resolution_clock::now();
+      state.stats.candidate_cache_copy_acc_s +=
+        std::chrono::duration<double>(t_cache1 - t_cache0).count();
+    }
+    if (!used_cached) {
+      state.scan.gate_candidates.resize(gate_count);
+      std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+      for (std::size_t g = 0; g < gate_count; ++g) {
+        if (!state.scan.gate_used[g]) {
+          state.scan.gate_candidates[g].clear();
+          continue;
+        }
+        state.scan.gate_candidates[g] =
+          state.scan.track_db->QueryAabb(state.scan.course_gates.gates[g]);
+      }
     }
 
     static std::vector<std::uint8_t> seen;
@@ -1398,6 +1663,7 @@ void process_scan_tick(PipelineState& state,
       std::fill(seen.begin(), seen.end(), 0);
     }
 
+    const auto t_pairs0 = std::chrono::high_resolution_clock::now();
     state.candidate_pairs.reserve(state.meas_batch.measurements.size() * 4);
     for (std::size_t mi = 0; mi < state.meas_batch.measurements.size(); ++mi) {
       const auto& m = state.meas_batch.measurements[mi];
@@ -1416,11 +1682,15 @@ void process_scan_tick(PipelineState& state,
         }
       }
     }
+    const auto t_pairs1 = std::chrono::high_resolution_clock::now();
+    state.stats.candidate_pairs_acc_s += std::chrono::duration<double>(t_pairs1 - t_pairs0).count();
   } else if (state.scan.course_gates.enabled && !state.scan.course_gates.gates.empty()) {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
     ids = db::QueryCourseGates(*state.scan.track_db,
                                state.scan.course_gates.gates,
                                tb_ref.n);
   } else {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
     ids = state.scan.track_db->QueryAabb(state.scan.scan_aabb);
   }
   const auto t2 = std::chrono::high_resolution_clock::now();
@@ -1435,6 +1705,7 @@ void process_scan_tick(PipelineState& state,
   const double avg_pairs_per_meas =
     (n_meas > 0.0) ? (static_cast<double>(state.candidate_pairs.size()) / n_meas) : 0.0;
 
+  const auto t_assoc_telemetry0 = std::chrono::high_resolution_clock::now();
   std::vector<std::uint32_t> meas_counts;
   meas_counts.resize(state.meas_batch.measurements.size(), 0);
   for (const auto& p : state.candidate_pairs) {
@@ -1467,6 +1738,9 @@ void process_scan_tick(PipelineState& state,
     choose_assoc_mode(state.cfg->gating_assoc.assoc_decision,
                       budget_ms, elapsed_ms, avg_pairs_per_meas,
                       ambiguous_frac, false_alarm_rate, cpu_load);
+  const auto t_assoc_telemetry1 = std::chrono::high_resolution_clock::now();
+  state.stats.assoc_telemetry_acc_s +=
+    std::chrono::duration<double>(t_assoc_telemetry1 - t_assoc_telemetry0).count();
 
   static bool assoc_log_init = false;
   static bool assoc_header_written = false;
@@ -1476,6 +1750,7 @@ void process_scan_tick(PipelineState& state,
     assoc_log_init = true;
     assoc_header_written = false;
   }
+  const auto t_assoc_log0 = std::chrono::high_resolution_clock::now();
   if (env_log_enabled("TRACKER_LOG_ASSOC_MODE", true) &&
       ensure_output_dir(state.cli.output_dir)) {
     std::ofstream out(assoc_log_path, assoc_header_written ? std::ios::app : std::ios::trunc);
@@ -1505,25 +1780,45 @@ void process_scan_tick(PipelineState& state,
           << '\n';
     }
   }
+  const auto t_assoc_log1 = std::chrono::high_resolution_clock::now();
+  state.stats.assoc_log_acc_s +=
+    std::chrono::duration<double>(t_assoc_log1 - t_assoc_log0).count();
 
   state.stats.update_acc += std::chrono::duration<double>(t1 - t0).count();
+  state.stats.meas_gen_acc_s += std::chrono::duration<double>(t_meas1 - t_meas0).count();
   state.stats.query_acc  += std::chrono::duration<double>(t2 - t1q).count();
-  state.stats.nupd_acc   += static_cast<double>(state.scan.track_db->NumUpdatedLastUpdate());
+  state.stats.candidate_acc_s += std::chrono::duration<double>(t2 - t1q).count();
+  {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+    state.stats.nupd_acc += static_cast<double>(state.scan.track_db->NumUpdatedLastUpdate());
+  }
   ++state.stats.k_acc;
 
   // Placeholder pipeline stages (gating -> association -> filter -> maintenance)
+  const auto t_gate0 = std::chrono::high_resolution_clock::now();
   stage_coarse_gating(state, ids, t_s);
+  const auto t_gate1 = std::chrono::high_resolution_clock::now();
   stage_fine_gating(state, ids, t_s);
+  const auto t_gate2 = std::chrono::high_resolution_clock::now();
   stage_association(state, ids, t_s);
+  const auto t_assoc1 = std::chrono::high_resolution_clock::now();
   stage_filter_update(state, ids, t_s);
+  const auto t_filter1 = std::chrono::high_resolution_clock::now();
   stage_track_maintenance(state, t_s);
   const auto t3 = std::chrono::high_resolution_clock::now();
+
+  state.stats.coarse_gate_acc_s += std::chrono::duration<double>(t_gate1 - t_gate0).count();
+  state.stats.fine_gate_acc_s += std::chrono::duration<double>(t_gate2 - t_gate1).count();
+  state.stats.assoc_acc_s += std::chrono::duration<double>(t_assoc1 - t_gate2).count();
+  state.stats.filter_acc_s += std::chrono::duration<double>(t_filter1 - t_assoc1).count();
+  state.stats.maintenance_acc_s += std::chrono::duration<double>(t3 - t_filter1).count();
 
   // Persist post-scan updates to warm store (if configured).
   // Heuristic: treat all scan candidates as changed until filter/maintenance marks specific ids.
   state.changed_ids = ids;
   bool did_finalize = false;
-    if (!state.changed_ids.empty()) {
+  if (!state.changed_ids.empty()) {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
     state.scan.track_db->FinalizeScan(
       t_s, state.tb, &state.changed_ids);
     did_finalize = true;
@@ -1532,8 +1827,13 @@ void process_scan_tick(PipelineState& state,
 
   // --- Scan-driven covariance aging: age all hot tracks to scan time t_s ---
   // Use TrackBatch::last_cov_prop_s as t_pred_s (P-aged-to time) per-track.
+  trk::IdList hot_snapshot;
+  {
+    std::lock_guard<std::mutex> hot_lock(state.scan.hot_mutex);
+    hot_snapshot = state.scan.hot_ids;
+  }
   const trk::IdList& cov_ids =
-      (!state.scan.hot_ids.empty() ? state.scan.hot_ids : state.all_ids);
+      (!hot_snapshot.empty() ? hot_snapshot : state.all_ids);
   if (!cov_ids.empty()) {
     static std::vector<double> dt_ids;
     if (dt_ids.capacity() < cov_ids.size()) dt_ids.reserve(cov_ids.size());
@@ -1566,7 +1866,11 @@ void process_scan_tick(PipelineState& state,
   }
 
   if (state.debug_timing) {
-    const db::TrackDbTimingStats db_stats = state.scan.track_db->GetTimingStats();
+    db::TrackDbTimingStats db_stats;
+    {
+      std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+      db_stats = state.scan.track_db->GetTimingStats();
+    }
     if (db_stats.prefetch_calls > state.stats.prefetch_calls) {
       state.stats.prefetch_acc_s = db_stats.prefetch_acc_s;
       state.stats.prefetch_calls = db_stats.prefetch_calls;
@@ -1610,7 +1914,10 @@ void process_scan_tick(PipelineState& state,
       (state.stats.scan_count <= 3 || (state.stats.scan_count % 10 == 0))) {
     std::cout << "  scan=" << state.stats.scan_count
               << " t_s=" << t_s
-              << " n_updated=" << state.scan.track_db->NumUpdatedLastUpdate()
+              << " n_updated=" << [&](){
+                   std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+                   return state.scan.track_db->NumUpdatedLastUpdate();
+                 }()
               << " candidates=" << ids.size() << " / " << tb_ref.n << "\n";
   }
 }
@@ -1653,6 +1960,38 @@ void write_csvs(const PipelineState& state) {
   const double avg_update_s         = (state.stats.k_acc ? (state.stats.update_acc / state.stats.k_acc) : 0.0);
   const double avg_query_s          = (state.stats.k_acc ? (state.stats.query_acc / state.stats.k_acc) : 0.0);
   const double avg_n_updated        = (state.stats.k_acc ? (state.stats.nupd_acc / state.stats.k_acc) : 0.0);
+  const double avg_meas_gen_s       =
+      (state.stats.k_acc ? (state.stats.meas_gen_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_candidate_s      =
+      (state.stats.k_acc ? (state.stats.candidate_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_coarse_gate_s    =
+      (state.stats.k_acc ? (state.stats.coarse_gate_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_fine_gate_s      =
+      (state.stats.k_acc ? (state.stats.fine_gate_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_assoc_s          =
+      (state.stats.k_acc ? (state.stats.assoc_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_filter_s         =
+      (state.stats.k_acc ? (state.stats.filter_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_maintenance_s    =
+      (state.stats.k_acc ? (state.stats.maintenance_acc_s / state.stats.k_acc) : 0.0);
+  const double avg_scan_tick_s =
+      (state.stats.scan_count ? (state.stats.scan_tick_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_model_update_s =
+      (state.stats.scan_count ? (state.stats.model_update_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_propagate_s =
+      (state.stats.scan_count ? (state.stats.propagate_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_gate_used_s =
+      (state.stats.scan_count ? (state.stats.gate_used_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_candidate_pairs_s =
+      (state.stats.scan_count ? (state.stats.candidate_pairs_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_assoc_telemetry_s =
+      (state.stats.scan_count ? (state.stats.assoc_telemetry_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_prefetch_enqueue_s =
+      (state.stats.scan_count ? (state.stats.prefetch_enqueue_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_candidate_cache_copy_s =
+      (state.stats.scan_count ? (state.stats.candidate_cache_copy_acc_s / state.stats.scan_count) : 0.0);
+  const double avg_assoc_log_s =
+      (state.stats.scan_count ? (state.stats.assoc_log_acc_s / state.stats.scan_count) : 0.0);
   const double avg_tracks_per_call  =
       (state.stats.cov_age_calls
            ? (static_cast<double>(state.stats.cov_age_tracks_acc) / state.stats.cov_age_calls)
@@ -1661,8 +2000,11 @@ void write_csvs(const PipelineState& state) {
       (state.stats.cov_age_calls ? (state.stats.cov_age_acc_s / state.stats.cov_age_calls) : 0.0);
   const double avg_finalize_s =
       (state.stats.finalize_calls ? (state.stats.finalize_acc_s / state.stats.finalize_calls) : 0.0);
-  const db::TrackDbTimingStats db_stats =
-      state.scan.track_db ? state.scan.track_db->GetTimingStats() : db::TrackDbTimingStats{};
+  db::TrackDbTimingStats db_stats{};
+  if (state.scan.track_db) {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+    db_stats = state.scan.track_db->GetTimingStats();
+  }
   const double avg_prefetch_s =
       (db_stats.prefetch_calls ? (db_stats.prefetch_acc_s / db_stats.prefetch_calls) : 0.0);
   const double avg_finalize_begin_s =
@@ -1675,7 +2017,11 @@ void write_csvs(const PipelineState& state) {
   auto write_header = [](std::ostream& os) {
     os
       << "date,time,version,system_xml,xsd_dir,targets_xml,dim,tracks,dt_s,run_s,scan_hz,"
-         "scan_count,loop_time_s,loop_time_per_scan_s,avg_update_s,avg_query_s,avg_n_updated,finalize_total_s,finalize_avg_s,"
+         "scan_count,loop_time_s,loop_time_per_scan_s,avg_update_s,avg_query_s,avg_n_updated,"
+         "avg_meas_gen_s,avg_candidate_s,avg_coarse_gate_s,avg_fine_gate_s,avg_assoc_s,avg_filter_s,avg_maintenance_s,"
+         "avg_scan_tick_s,avg_model_update_s,avg_propagate_s,avg_gate_used_s,avg_candidate_pairs_s,avg_assoc_telemetry_s,dt_ticks,"
+         "avg_prefetch_enqueue_s,avg_candidate_cache_copy_s,avg_assoc_log_s,"
+         "finalize_total_s,finalize_avg_s,"
          "warm_commit_every_scans,hot_prefetch_min_s,hot_prefetch_window_s,"
          "finalize_begin_total_s,finalize_begin_avg_s,finalize_apply_total_s,finalize_apply_avg_s,"
          "finalize_commit_total_s,finalize_commit_avg_s,prefetch_total_s,prefetch_avg_s,prefetch_calls,"
@@ -1706,6 +2052,23 @@ void write_csvs(const PipelineState& state) {
       << avg_update_s << ','
       << avg_query_s << ','
       << avg_n_updated << ','
+      << avg_meas_gen_s << ','
+      << avg_candidate_s << ','
+      << avg_coarse_gate_s << ','
+      << avg_fine_gate_s << ','
+      << avg_assoc_s << ','
+      << avg_filter_s << ','
+      << avg_maintenance_s << ','
+      << avg_scan_tick_s << ','
+      << avg_model_update_s << ','
+      << avg_propagate_s << ','
+      << avg_gate_used_s << ','
+      << avg_candidate_pairs_s << ','
+      << avg_assoc_telemetry_s << ','
+      << state.stats.dt_ticks << ','
+      << avg_prefetch_enqueue_s << ','
+      << avg_candidate_cache_copy_s << ','
+      << avg_assoc_log_s << ','
       << state.stats.finalize_acc_s << ','
       << avg_finalize_s << ','
       << warm_commit_scans << ','
@@ -1733,29 +2096,31 @@ void write_csvs(const PipelineState& state) {
 
   const fs::path append_path = fs::path(state.cli.output_dir) / "performance.csv";
   std::error_code ec;
-  bool has_header = false;
   bool header_matches = false;
   if (fs::exists(append_path, ec) && !ec) {
     const auto sz = fs::file_size(append_path, ec);
-    has_header = (!ec && sz > 0);
-    if (has_header) {
+    const bool has_content = (!ec && sz > 0);
+    if (has_content) {
       std::ifstream in(append_path);
+      std::ostringstream expected;
+      write_header(expected);
+      std::string expected_line = expected.str();
+      if (!expected_line.empty() && expected_line.back() == '\n') {
+        expected_line.pop_back();
+      }
       std::string line;
-      if (in && std::getline(in, line)) {
-        std::ostringstream expected;
-        write_header(expected);
-        std::string expected_line = expected.str();
-        if (!expected_line.empty() && expected_line.back() == '\n') {
-          expected_line.pop_back();
+      while (in && std::getline(in, line)) {
+        if (line == expected_line) {
+          header_matches = true;
+          break;
         }
-        header_matches = (line == expected_line);
       }
     }
   }
   std::ofstream append_out(append_path, std::ios::app);
   if (append_out) {
     // Write header only when the rolling file is created.
-    if (!has_header || !header_matches) {
+    if (!header_matches) {
       write_header(append_out);
     }
     write_row(append_out);
@@ -1832,6 +2197,7 @@ int demo::RunDemo(int argc, char** argv) try {
   if (setup_scan_context(state)) {
     const auto loop_t0 = std::chrono::high_resolution_clock::now();
 
+    trk::ScenarioTiming timing;
     trk::run_scenario_loop(
       state.scan.tbm,
       state.scan.buckets,
@@ -1841,10 +2207,15 @@ int demo::RunDemo(int argc, char** argv) try {
       state.scan.mcfg,
       [&](trk::TrackKinematicsBatch& tb_ref, double t_s) {
         process_scan_tick(state, tb_ref, t_s);
-      });
+      },
+      &timing);
 
     const auto loop_t1 = std::chrono::high_resolution_clock::now();
     state.stats.loop_s = std::chrono::duration<double>(loop_t1 - loop_t0).count();
+    state.stats.scan_tick_acc_s = timing.scan_tick_acc_s;
+    state.stats.model_update_acc_s = timing.model_update_acc_s;
+    state.stats.propagate_acc_s = timing.propagate_acc_s;
+    state.stats.dt_ticks = timing.dt_ticks;
 
     std::cout << "  loop_time_s=" << state.stats.loop_s
               << " scans=" << state.stats.scan_count << "\n\n";
@@ -1870,12 +2241,16 @@ int demo::RunDemo(int argc, char** argv) try {
     std::cout << "Propagation skipped (--gen-only)\n";
   }
 
-    // Flush any async warm commits before writing CSV so commit timings are included.
-    if (state.scan.track_db) {
-      state.scan.track_db->FlushWarmUpdates();
-    }
-    // Write performance metrics to CSV (single-row, time-stamped per run)
-    write_csvs(state);
+  stop_prefetch_worker(state);
+  stop_candidate_worker(state);
+
+  // Flush any async warm commits before writing CSV so commit timings are included.
+  if (state.scan.track_db) {
+    std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
+    state.scan.track_db->FlushWarmUpdates();
+  }
+  // Write performance metrics to CSV (single-row, time-stamped per run)
+  write_csvs(state);
 
   return 0;
 

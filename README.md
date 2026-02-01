@@ -35,6 +35,20 @@ docker build --target build -t la-dev:eigen-build --build-arg BACKEND=eigen .
 docker run --rm -it -v ${PWD}:/src -w /src la-dev:eigen-build /bin/bash
 ```
 
+## Docker Compose Shortcuts
+
+Build + run a backend:
+```bash
+docker compose --profile eigen up --build --abort-on-container-exit
+docker compose --profile mkl   up --build --abort-on-container-exit
+docker compose --profile std   up --build --abort-on-container-exit
+```
+
+Dev shell (Eigen build stage):
+```bash
+docker compose --profile dev run --rm dev-eigen /bin/bash
+```
+
 ## Commands Inside the Dev Container
 
 Build:
