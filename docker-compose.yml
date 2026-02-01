@@ -7,6 +7,10 @@ services:
       context: .
       args:
         BACKEND: eigen
+    volumes:
+      - .:/src
+    working_dir: /src/C_Container
+    command: ["./run.sh"]
     profiles: ["eigen"]
 
   demo-mkl:
@@ -15,6 +19,10 @@ services:
       context: .
       args:
         BACKEND: mkl
+    volumes:
+      - .:/src
+    working_dir: /src/C_Container
+    command: ["./run.sh"]
     profiles: ["mkl"]
 
   demo-std:
@@ -23,6 +31,10 @@ services:
       context: .
       args:
         BACKEND: std
+    volumes:
+      - .:/src
+    working_dir: /src/C_Container
+    command: ["./run.sh"]
     profiles: ["std"]
 
   dev-eigen:
