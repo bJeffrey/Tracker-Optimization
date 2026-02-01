@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  demo-eigen:
+    image: la-demo:eigen
+    build:
+      context: .
+      args:
+        BACKEND: eigen
+    profiles: ["eigen"]
+
+  demo-mkl:
+    image: la-demo:mkl
+    build:
+      context: .
+      args:
+        BACKEND: mkl
+    profiles: ["mkl"]
+
+  demo-std:
+    image: la-demo:std
+    build:
+      context: .
+      args:
+        BACKEND: std
+    profiles: ["std"]
+
+  dev-eigen:
+    image: la-dev:eigen-build
+    build:
+      context: .
+      target: build
+      args:
+        BACKEND: eigen
+    volumes:
+      - .:/src
+    working_dir: /src
+    tty: true
+    stdin_open: true
+    profiles: ["dev"]
