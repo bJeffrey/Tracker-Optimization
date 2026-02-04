@@ -68,20 +68,20 @@ inline void run_scenario_loop(TrackKinematicsBatch& tb,
     ctx.t_s = t;
 
     // 0) scan tick(s) due at time t (state is "at t" here)
-    const auto scan_t0 = std::chrono::high_resolution_clock::now();
+    const auto scan_t0 = std::chrono::steady_clock::now();
     emit_scans_up_to(t);
-    const auto scan_t1 = std::chrono::high_resolution_clock::now();
+    const auto scan_t1 = std::chrono::steady_clock::now();
 
     // 1) optional model update (still at time t)
-    const auto model_t0 = std::chrono::high_resolution_clock::now();
+    const auto model_t0 = std::chrono::steady_clock::now();
     selector.update_models(tb, buckets);
-    const auto model_t1 = std::chrono::high_resolution_clock::now();
+    const auto model_t1 = std::chrono::steady_clock::now();
 
     // 2) propagate by bucket from t -> t+dt
-    const auto prop_t0 = std::chrono::high_resolution_clock::now();
+    const auto prop_t0 = std::chrono::steady_clock::now();
     if (!buckets.bucket_ca.empty()) model_ca.propagate(tb, buckets.bucket_ca, cfg.dt_s, ctx);
     if (!buckets.bucket_ct.empty()) model_ct.propagate(tb, buckets.bucket_ct, cfg.dt_s, ctx);
-    const auto prop_t1 = std::chrono::high_resolution_clock::now();
+    const auto prop_t1 = std::chrono::steady_clock::now();
 
     if (timing) {
       timing->scan_tick_acc_s += std::chrono::duration<double>(scan_t1 - scan_t0).count();

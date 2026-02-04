@@ -58,3 +58,9 @@ Worker thread plan (additions)
 - Finalize worker: async warm flush after scan; write index + state/cov/metadata in a single transaction.
 - Triggers: scan count, buffered track count, and shutdown (configurable thresholds in store.xml).
 - Telemetry: prefetch latency, flush latency, queue depth, cache hit rate, commit timing captured in performance.csv.
+
+Per-scan runtime candidates to move off the scan thread
+- Measurement generation: truth → AER/ENU conversions + noise (produce next scan's measurements in a worker).
+- Association: candidate pairs scoring (thread-pool by measurement or by gate).
+- Covariance aging: move to lower-rate background job or stagger across scans.
+- Candidate pairs build: keep gate queries async and build pairs in worker too.

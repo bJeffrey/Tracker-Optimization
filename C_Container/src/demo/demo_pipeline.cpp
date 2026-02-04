@@ -51,7 +51,10 @@
 #include <fstream>
 #include <condition_variable>
 
+
 namespace fs = std::filesystem;
+
+using PerfClock = std::chrono::steady_clock;
 
 /**
  * @brief Check if a filesystem path exists (no exceptions).
@@ -176,6 +179,14 @@ struct ScanContext {
     bool pending = false;
     std::vector<std::uint8_t> gate_used;
   };
+  struct MeasurementWorker {
+    std::thread thread;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool stop = false;
+    bool pending = false;
+    double t_s = 0.0;
+  };
   GateGrid gate_grid{};
   std::vector<trk::IdList> gate_candidates{};
   std::vector<trk::IdList> gate_candidates_cache{};
@@ -195,6 +206,12 @@ struct ScanContext {
   PrefetchWorker prefetch_worker{};
   bool candidate_thread_enabled = false;
   CandidateWorker candidate_worker{};
+  bool measurement_thread_enabled = false;
+  MeasurementWorker measurement_worker{};
+  std::mutex meas_mutex;
+  bool meas_ready = false;
+  double meas_cache_t_s = 0.0;
+  meas::MeasurementBatch meas_cache{};
   trk::TrackKinematicsBatch tbm;
   trk::ModelBuckets buckets;
   trk::MotionModel_CA9 model_ca;
@@ -337,6 +354,182 @@ void stop_candidate_worker(PipelineState& state) {
   if (state.scan.candidate_worker.thread.joinable()) {
     state.scan.candidate_worker.thread.join();
   }
+}
+
+meas::MeasurementBatch generate_measurements_aer(const PipelineState& state, double t_s) {
+  meas::MeasurementBatch batch;
+  if (!state.has_truth || !state.cfg->has_sensors || state.cfg->sensors.sensors.empty()) {
+    return batch;
+  }
+  const cfg::SensorCfg& sensor = state.cfg->sensors.sensors.front();
+  if (!sensor.meas_model.has_radar ||
+      sensor.meas_model.radar.type == cfg::RadarMeasurementType::UNKNOWN) {
+    return batch;
+  }
+
+  coord::AerRadBatch aer;
+  coord::EcefToAerBatch(state.truth.pos, state.cfg->ownship, aer);
+
+  batch.meta.sensor_id = sensor.id;
+  batch.meta.frame = sensor.scan.frame;
+  batch.meta.timestamp_s = t_s;
+  batch.meta.ownship_x_ecef = state.cfg->ownship.pos_x;
+  batch.meta.ownship_y_ecef = state.cfg->ownship.pos_y;
+  batch.meta.ownship_z_ecef = state.cfg->ownship.pos_z;
+  batch.type = sensor.meas_model.radar.type;
+  batch.measurements.clear();
+  batch.measurements.reserve(state.truth.n + sensor.meas_model.radar.false_alarm_count);
+
+  const double snr_lin = std::pow(10.0, 0.1 * sensor.meas_model.radar.ref_snr_db);
+  const double bw_az_rad = (sensor.beamwidth_3db_az_deg > 0.0)
+                             ? (sensor.beamwidth_3db_az_deg * 3.14159265358979323846 / 180.0)
+                             : 0.0;
+  const double bw_el_rad = (sensor.beamwidth_3db_el_deg > 0.0)
+                             ? (sensor.beamwidth_3db_el_deg * 3.14159265358979323846 / 180.0)
+                             : 0.0;
+  const double sigma_r = (snr_lin > 0.0)
+                           ? (sensor.meas_model.radar.ref_range_m / snr_lin)
+                           : 0.0;
+  const double sigma_az = (snr_lin > 0.0) ? (bw_az_rad / snr_lin) : 0.0;
+  const double sigma_el = (snr_lin > 0.0) ? (bw_el_rad / snr_lin) : 0.0;
+
+  static std::mt19937 rng(1337u);
+  std::normal_distribution<double> nr(0.0, sigma_r);
+  std::normal_distribution<double> naz(0.0, sigma_az);
+  std::normal_distribution<double> nel(0.0, sigma_el);
+  std::uniform_real_distribution<double> uni01(0.0, 1.0);
+
+  const double det_p = std::min(1.0, std::max(0.0, sensor.meas_model.radar.detection_prob));
+  const double az_min = sensor.scan.frustum.az_min_deg * 3.14159265358979323846 / 180.0;
+  const double az_max = sensor.scan.frustum.az_max_deg * 3.14159265358979323846 / 180.0;
+  const double el_min = sensor.scan.frustum.el_min_deg * 3.14159265358979323846 / 180.0;
+  const double el_max = sensor.scan.frustum.el_max_deg * 3.14159265358979323846 / 180.0;
+  const double r_min = sensor.scan.frustum.r_min_m;
+  const double r_max = sensor.scan.frustum.r_max_m;
+  std::uniform_real_distribution<double> uni_az(az_min, az_max);
+  std::uniform_real_distribution<double> uni_el(el_min, el_max);
+  std::uniform_real_distribution<double> uni_r(r_min, r_max);
+
+  std::uint64_t meas_seq = 0;
+  for (std::size_t i = 0; i < state.truth.n; ++i) {
+    if (uni01(rng) > det_p) continue;
+    meas::RadarMeasurement m{};
+    const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
+    m.id = (t_us << 20) | (meas_seq++ & 0xFFFFFu);
+    m.truth_index = static_cast<std::uint32_t>(i);
+    m.has_truth = true;
+    const double r = aer.r_m[i];
+    const double az = aer.az_rad[i];
+    const double el = aer.el_rad[i];
+
+    m.range_m = r + nr(rng);
+    m.az_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (az + naz(rng)) : 0.0;
+    m.el_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (el + nel(rng)) : 0.0;
+    m.snr_db = sensor.meas_model.radar.ref_snr_db;
+    m.rcs_m2 = sensor.meas_model.radar.ref_rcs_m2;
+
+    m.R = {0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0};
+    m.R[0] = sigma_r * sigma_r;
+    if (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) {
+      m.R[4] = sigma_az * sigma_az;
+      m.R[8] = sigma_el * sigma_el;
+    }
+
+    batch.measurements.push_back(m);
+  }
+
+  for (std::uint32_t k = 0; k < sensor.meas_model.radar.false_alarm_count; ++k) {
+    if (r_max <= r_min) break;
+    meas::RadarMeasurement m{};
+    const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
+    m.id = (t_us << 20) | (meas_seq++ & 0xFFFFFu);
+    m.truth_index = 0;
+    m.has_truth = false;
+    const double r = uni_r(rng);
+    const double az = uni_az(rng);
+    const double el = uni_el(rng);
+
+    m.range_m = r + nr(rng);
+    m.az_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (az + naz(rng)) : 0.0;
+    m.el_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (el + nel(rng)) : 0.0;
+    m.snr_db = sensor.meas_model.radar.ref_snr_db;
+    m.rcs_m2 = sensor.meas_model.radar.ref_rcs_m2;
+
+    m.R = {0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0,
+           0.0, 0.0, 0.0};
+    m.R[0] = sigma_r * sigma_r;
+    if (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) {
+      m.R[4] = sigma_az * sigma_az;
+      m.R[8] = sigma_el * sigma_el;
+    }
+
+    batch.measurements.push_back(m);
+  }
+
+  return batch;
+}
+
+void start_measurement_worker(PipelineState& state) {
+  if (!state.scan.measurement_thread_enabled) return;
+  state.scan.measurement_worker.thread = std::thread([&state]() {
+    auto& scan = state.scan;
+    while (true) {
+      double t_s = 0.0;
+      {
+        std::unique_lock<std::mutex> lock(scan.measurement_worker.mutex);
+        scan.measurement_worker.cv.wait(lock, [&]() {
+          return scan.measurement_worker.stop || scan.measurement_worker.pending;
+        });
+        if (scan.measurement_worker.stop) break;
+        t_s = scan.measurement_worker.t_s;
+        scan.measurement_worker.pending = false;
+      }
+
+      meas::MeasurementBatch batch = generate_measurements_aer(state, t_s);
+      {
+        std::lock_guard<std::mutex> lock(scan.meas_mutex);
+        scan.meas_cache = std::move(batch);
+        scan.meas_cache_t_s = t_s;
+        scan.meas_ready = true;
+      }
+    }
+  });
+}
+
+void stop_measurement_worker(PipelineState& state) {
+  if (!state.scan.measurement_thread_enabled) return;
+  {
+    std::lock_guard<std::mutex> lock(state.scan.measurement_worker.mutex);
+    state.scan.measurement_worker.stop = true;
+    state.scan.measurement_worker.pending = true;
+  }
+  state.scan.measurement_worker.cv.notify_all();
+  if (state.scan.measurement_worker.thread.joinable()) {
+    state.scan.measurement_worker.thread.join();
+  }
+}
+
+void enqueue_measurement_request(PipelineState& state, double t_s) {
+  if (!state.scan.measurement_thread_enabled) return;
+  {
+    std::lock_guard<std::mutex> lock(state.scan.measurement_worker.mutex);
+    state.scan.measurement_worker.t_s = t_s;
+    state.scan.measurement_worker.pending = true;
+  }
+  state.scan.measurement_worker.cv.notify_one();
+}
+
+bool try_consume_measurements(PipelineState& state, double& out_t_s) {
+  if (!state.scan.measurement_thread_enabled) return false;
+  std::lock_guard<std::mutex> lock(state.scan.meas_mutex);
+  if (!state.scan.meas_ready) return false;
+  state.meas_batch = std::move(state.scan.meas_cache);
+  out_t_s = state.scan.meas_cache_t_s;
+  state.scan.meas_ready = false;
+  return true;
 }
 
 enum class LogLevel : int {
@@ -735,122 +928,11 @@ inline void build_kinematics_from_track_batch(const trk::TrackBatch& tb_in,
 // Pipeline stage stubs
 // ------------------------------
 /**
- * @brief Placeholder for measurement generation stage.
+ * @brief Measurement post-processing stage (AER->ENU gate lookup + logs).
+ * Measurement generation is handled on the measurement worker thread.
  */
-void stage_measurement_generation(PipelineState& state, double t_s) {
-  if (!state.has_truth || !state.cfg->has_sensors || state.cfg->sensors.sensors.empty()) {
-    return;
-  }
-  const cfg::SensorCfg& sensor = state.cfg->sensors.sensors.front();
-  if (!sensor.meas_model.has_radar ||
-      sensor.meas_model.radar.type == cfg::RadarMeasurementType::UNKNOWN) {
-    return;
-  }
-
-  coord::AerRadBatch aer;
-  coord::EcefToAerBatch(state.truth.pos, state.cfg->ownship, aer);
-
-  meas::MeasurementBatch batch;
-  batch.meta.sensor_id = sensor.id;
-  batch.meta.frame = sensor.scan.frame;
-  batch.meta.timestamp_s = t_s;
-  batch.meta.ownship_x_ecef = state.cfg->ownship.pos_x;
-  batch.meta.ownship_y_ecef = state.cfg->ownship.pos_y;
-  batch.meta.ownship_z_ecef = state.cfg->ownship.pos_z;
-  batch.type = sensor.meas_model.radar.type;
-  batch.measurements.clear();
-  batch.measurements.reserve(state.truth.n + sensor.meas_model.radar.false_alarm_count);
-
-  const double snr_lin = std::pow(10.0, 0.1 * sensor.meas_model.radar.ref_snr_db);
-  const double bw_az_rad = (sensor.beamwidth_3db_az_deg > 0.0)
-                             ? (sensor.beamwidth_3db_az_deg * 3.14159265358979323846 / 180.0)
-                             : 0.0;
-  const double bw_el_rad = (sensor.beamwidth_3db_el_deg > 0.0)
-                             ? (sensor.beamwidth_3db_el_deg * 3.14159265358979323846 / 180.0)
-                             : 0.0;
-  const double sigma_r = (snr_lin > 0.0)
-                           ? (sensor.meas_model.radar.ref_range_m / snr_lin)
-                           : 0.0;
-  const double sigma_az = (snr_lin > 0.0) ? (bw_az_rad / snr_lin) : 0.0;
-  const double sigma_el = (snr_lin > 0.0) ? (bw_el_rad / snr_lin) : 0.0;
-
-  static std::mt19937 rng(1337u);
-  std::normal_distribution<double> nr(0.0, sigma_r);
-  std::normal_distribution<double> naz(0.0, sigma_az);
-  std::normal_distribution<double> nel(0.0, sigma_el);
-  std::uniform_real_distribution<double> uni01(0.0, 1.0);
-
-  const double det_p = std::min(1.0, std::max(0.0, sensor.meas_model.radar.detection_prob));
-  const double az_min = sensor.scan.frustum.az_min_deg * 3.14159265358979323846 / 180.0;
-  const double az_max = sensor.scan.frustum.az_max_deg * 3.14159265358979323846 / 180.0;
-  const double el_min = sensor.scan.frustum.el_min_deg * 3.14159265358979323846 / 180.0;
-  const double el_max = sensor.scan.frustum.el_max_deg * 3.14159265358979323846 / 180.0;
-  const double r_min = sensor.scan.frustum.r_min_m;
-  const double r_max = sensor.scan.frustum.r_max_m;
-  std::uniform_real_distribution<double> uni_az(az_min, az_max);
-  std::uniform_real_distribution<double> uni_el(el_min, el_max);
-  std::uniform_real_distribution<double> uni_r(r_min, r_max);
-
-  std::uint64_t meas_seq = 0;
-  for (std::size_t i = 0; i < state.truth.n; ++i) {
-    if (uni01(rng) > det_p) continue;
-    meas::RadarMeasurement m{};
-    const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
-    m.id = (t_us << 20) | (meas_seq++ & 0xFFFFFu);
-    m.truth_index = static_cast<std::uint32_t>(i);
-    m.has_truth = true;
-    const double r = aer.r_m[i];
-    const double az = aer.az_rad[i];
-    const double el = aer.el_rad[i];
-
-    m.range_m = r + nr(rng);
-    m.az_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (az + naz(rng)) : 0.0;
-    m.el_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (el + nel(rng)) : 0.0;
-    m.snr_db = sensor.meas_model.radar.ref_snr_db;
-    m.rcs_m2 = sensor.meas_model.radar.ref_rcs_m2;
-
-    m.R = {0.0, 0.0, 0.0,
-           0.0, 0.0, 0.0,
-           0.0, 0.0, 0.0};
-    m.R[0] = sigma_r * sigma_r;
-    if (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) {
-      m.R[4] = sigma_az * sigma_az;
-      m.R[8] = sigma_el * sigma_el;
-    }
-
-    batch.measurements.push_back(m);
-  }
-
-  for (std::uint32_t k = 0; k < sensor.meas_model.radar.false_alarm_count; ++k) {
-    if (r_max <= r_min) break;
-    meas::RadarMeasurement m{};
-    const std::uint64_t t_us = static_cast<std::uint64_t>(std::llround(t_s * 1e6));
-    m.id = (t_us << 20) | (meas_seq++ & 0xFFFFFu);
-    m.truth_index = 0;
-    m.has_truth = false;
-    const double r = uni_r(rng);
-    const double az = uni_az(rng);
-    const double el = uni_el(rng);
-
-    m.range_m = r + nr(rng);
-    m.az_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (az + naz(rng)) : 0.0;
-    m.el_rad = (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) ? (el + nel(rng)) : 0.0;
-    m.snr_db = sensor.meas_model.radar.ref_snr_db;
-    m.rcs_m2 = sensor.meas_model.radar.ref_rcs_m2;
-
-    m.R = {0.0, 0.0, 0.0,
-           0.0, 0.0, 0.0,
-           0.0, 0.0, 0.0};
-    m.R[0] = sigma_r * sigma_r;
-    if (batch.type == cfg::RadarMeasurementType::RANGE_AZ_EL) {
-      m.R[4] = sigma_az * sigma_az;
-      m.R[8] = sigma_el * sigma_el;
-    }
-
-    batch.measurements.push_back(m);
-  }
-
-  state.meas_batch = std::move(batch);
+void stage_measurement_postprocess(PipelineState& state, double t_s) {
+  if (state.meas_batch.measurements.empty()) return;
 
   if (state.scan.course_gates.enabled && state.scan.gate_grid.enabled) {
     const auto& grid = state.scan.gate_grid;
@@ -1440,12 +1522,12 @@ bool setup_scan_context(PipelineState& state) {
 
     if (!reuse_db) {
       // Initialize warm store before the scan loop so first-scan latency is not impacted.
-      const auto init_t0 = std::chrono::high_resolution_clock::now();
+      const auto init_t0 = PerfClock::now();
       state.scan.track_db->FinalizeScan(
         0.0,
         state.tb,
         nullptr);
-      const auto init_t1 = std::chrono::high_resolution_clock::now();
+      const auto init_t1 = PerfClock::now();
       const double init_s = std::chrono::duration<double>(init_t1 - init_t0).count();
       if (should_log(LogLevel::INFO)) {
         std::cout << "  warm_init_s=" << init_s << "\n";
@@ -1473,6 +1555,12 @@ bool setup_scan_context(PipelineState& state) {
     (store.mode == "HOT_PLUS_WARM" && state.scan.course_gates.enabled);
   if (state.scan.candidate_thread_enabled) {
     start_candidate_worker(state);
+  }
+  state.scan.measurement_thread_enabled =
+    (state.cfg->has_sensors && !state.cfg->sensors.sensors.empty());
+  if (state.scan.measurement_thread_enabled) {
+    start_measurement_worker(state);
+    enqueue_measurement_request(state, 0.0);
   }
 
   if (should_log(LogLevel::INFO)) {
@@ -1526,7 +1614,7 @@ void process_scan_tick(PipelineState& state,
 
   if (state.cfg->store_profile.mode == "HOT_PLUS_WARM") {
     if (state.scan.prefetch_thread_enabled) {
-      const auto t_prefetch0 = std::chrono::high_resolution_clock::now();
+      const auto t_prefetch0 = PerfClock::now();
       {
         std::lock_guard<std::mutex> lock(state.scan.prefetch_worker.mutex);
         state.scan.prefetch_worker.t_s = t_s;
@@ -1534,7 +1622,7 @@ void process_scan_tick(PipelineState& state,
         state.scan.prefetch_worker.pending = true;
       }
       state.scan.prefetch_worker.cv.notify_one();
-      const auto t_prefetch1 = std::chrono::high_resolution_clock::now();
+      const auto t_prefetch1 = PerfClock::now();
       state.stats.prefetch_enqueue_acc_s +=
         std::chrono::duration<double>(t_prefetch1 - t_prefetch0).count();
     } else {
@@ -1558,16 +1646,29 @@ void process_scan_tick(PipelineState& state,
     }
   }
 
-  const auto t0 = std::chrono::high_resolution_clock::now();
+  const auto t0 = PerfClock::now();
   {
     std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
     state.scan.track_db->UpdateTracks(t_s, tb_ref.x_ptr(), tb_ref.y_ptr(), tb_ref.z_ptr(), tb_ref.n);
   }
-  const auto t1 = std::chrono::high_resolution_clock::now();
+  const auto t1 = PerfClock::now();
 
-  const auto t_meas0 = std::chrono::high_resolution_clock::now();
-  stage_measurement_generation(state, t_s);
-  const auto t_meas1 = std::chrono::high_resolution_clock::now();
+  const auto t_meas0 = PerfClock::now();
+  bool has_meas = false;
+  if (state.scan.measurement_thread_enabled) {
+    // Measurements arrive asynchronously (simulated message bus).
+    double meas_t_s = t_s;
+    has_meas = try_consume_measurements(state, meas_t_s);
+  } else {
+    state.meas_batch = generate_measurements_aer(state, t_s);
+    has_meas = !state.meas_batch.measurements.empty();
+  }
+  if (has_meas) {
+    stage_measurement_postprocess(state, t_s);
+  } else {
+    state.meas_batch.measurements.clear();
+  }
+  const auto t_meas1 = PerfClock::now();
 
   const auto t1q = t_meas1;
   // Candidate track indices for this scan.
@@ -1583,7 +1684,7 @@ void process_scan_tick(PipelineState& state,
     const double gate_half_e = 0.5 * state.cfg->gating_assoc.course_gates.side_x_m;
     const double gate_half_n = 0.5 * state.cfg->gating_assoc.course_gates.side_y_m;
 
-    const auto t_gate_used0 = std::chrono::high_resolution_clock::now();
+    const auto t_gate_used0 = PerfClock::now();
     for (const auto& m : state.meas_batch.measurements) {
       if (m.gate_index < 0) continue;
       const std::size_t g = static_cast<std::size_t>(m.gate_index);
@@ -1618,7 +1719,7 @@ void process_scan_tick(PipelineState& state,
         }
       }
     }
-    const auto t_gate_used1 = std::chrono::high_resolution_clock::now();
+    const auto t_gate_used1 = PerfClock::now();
     state.stats.gate_used_acc_s += std::chrono::duration<double>(t_gate_used1 - t_gate_used0).count();
 
     if (state.scan.candidate_thread_enabled) {
@@ -1632,14 +1733,14 @@ void process_scan_tick(PipelineState& state,
 
     bool used_cached = false;
     if (state.scan.candidate_thread_enabled) {
-      const auto t_cache0 = std::chrono::high_resolution_clock::now();
+      const auto t_cache0 = PerfClock::now();
       std::lock_guard<std::mutex> lock(state.scan.gate_candidates_mutex);
       if (state.scan.gate_candidates_ready &&
           state.scan.gate_candidates_cache.size() == gate_count) {
         state.scan.gate_candidates = state.scan.gate_candidates_cache;
         used_cached = true;
       }
-      const auto t_cache1 = std::chrono::high_resolution_clock::now();
+      const auto t_cache1 = PerfClock::now();
       state.stats.candidate_cache_copy_acc_s +=
         std::chrono::duration<double>(t_cache1 - t_cache0).count();
     }
@@ -1663,7 +1764,7 @@ void process_scan_tick(PipelineState& state,
       std::fill(seen.begin(), seen.end(), 0);
     }
 
-    const auto t_pairs0 = std::chrono::high_resolution_clock::now();
+    const auto t_pairs0 = PerfClock::now();
     state.candidate_pairs.reserve(state.meas_batch.measurements.size() * 4);
     for (std::size_t mi = 0; mi < state.meas_batch.measurements.size(); ++mi) {
       const auto& m = state.meas_batch.measurements[mi];
@@ -1682,7 +1783,7 @@ void process_scan_tick(PipelineState& state,
         }
       }
     }
-    const auto t_pairs1 = std::chrono::high_resolution_clock::now();
+    const auto t_pairs1 = PerfClock::now();
     state.stats.candidate_pairs_acc_s += std::chrono::duration<double>(t_pairs1 - t_pairs0).count();
   } else if (state.scan.course_gates.enabled && !state.scan.course_gates.gates.empty()) {
     std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
@@ -1693,7 +1794,7 @@ void process_scan_tick(PipelineState& state,
     std::lock_guard<std::mutex> db_lock(state.scan.db_mutex);
     ids = state.scan.track_db->QueryAabb(state.scan.scan_aabb);
   }
-  const auto t2 = std::chrono::high_resolution_clock::now();
+  const auto t2 = PerfClock::now();
 
   // --- Association mode telemetry (decision inputs)
   const double budget_ms = (state.scan.mcfg.scan_rate_hz > 0.0)
@@ -1705,7 +1806,7 @@ void process_scan_tick(PipelineState& state,
   const double avg_pairs_per_meas =
     (n_meas > 0.0) ? (static_cast<double>(state.candidate_pairs.size()) / n_meas) : 0.0;
 
-  const auto t_assoc_telemetry0 = std::chrono::high_resolution_clock::now();
+  const auto t_assoc_telemetry0 = PerfClock::now();
   std::vector<std::uint32_t> meas_counts;
   meas_counts.resize(state.meas_batch.measurements.size(), 0);
   for (const auto& p : state.candidate_pairs) {
@@ -1738,7 +1839,7 @@ void process_scan_tick(PipelineState& state,
     choose_assoc_mode(state.cfg->gating_assoc.assoc_decision,
                       budget_ms, elapsed_ms, avg_pairs_per_meas,
                       ambiguous_frac, false_alarm_rate, cpu_load);
-  const auto t_assoc_telemetry1 = std::chrono::high_resolution_clock::now();
+  const auto t_assoc_telemetry1 = PerfClock::now();
   state.stats.assoc_telemetry_acc_s +=
     std::chrono::duration<double>(t_assoc_telemetry1 - t_assoc_telemetry0).count();
 
@@ -1750,7 +1851,7 @@ void process_scan_tick(PipelineState& state,
     assoc_log_init = true;
     assoc_header_written = false;
   }
-  const auto t_assoc_log0 = std::chrono::high_resolution_clock::now();
+  const auto t_assoc_log0 = PerfClock::now();
   if (env_log_enabled("TRACKER_LOG_ASSOC_MODE", true) &&
       ensure_output_dir(state.cli.output_dir)) {
     std::ofstream out(assoc_log_path, assoc_header_written ? std::ios::app : std::ios::trunc);
@@ -1780,7 +1881,7 @@ void process_scan_tick(PipelineState& state,
           << '\n';
     }
   }
-  const auto t_assoc_log1 = std::chrono::high_resolution_clock::now();
+  const auto t_assoc_log1 = PerfClock::now();
   state.stats.assoc_log_acc_s +=
     std::chrono::duration<double>(t_assoc_log1 - t_assoc_log0).count();
 
@@ -1793,19 +1894,24 @@ void process_scan_tick(PipelineState& state,
     state.stats.nupd_acc += static_cast<double>(state.scan.track_db->NumUpdatedLastUpdate());
   }
   ++state.stats.k_acc;
+  if (state.scan.measurement_thread_enabled) {
+    const double scan_dt =
+      (state.scan.mcfg.scan_rate_hz > 0.0) ? (1.0 / state.scan.mcfg.scan_rate_hz) : 0.0;
+    enqueue_measurement_request(state, t_s + scan_dt);
+  }
 
   // Placeholder pipeline stages (gating -> association -> filter -> maintenance)
-  const auto t_gate0 = std::chrono::high_resolution_clock::now();
+  const auto t_gate0 = PerfClock::now();
   stage_coarse_gating(state, ids, t_s);
-  const auto t_gate1 = std::chrono::high_resolution_clock::now();
+  const auto t_gate1 = PerfClock::now();
   stage_fine_gating(state, ids, t_s);
-  const auto t_gate2 = std::chrono::high_resolution_clock::now();
+  const auto t_gate2 = PerfClock::now();
   stage_association(state, ids, t_s);
-  const auto t_assoc1 = std::chrono::high_resolution_clock::now();
+  const auto t_assoc1 = PerfClock::now();
   stage_filter_update(state, ids, t_s);
-  const auto t_filter1 = std::chrono::high_resolution_clock::now();
+  const auto t_filter1 = PerfClock::now();
   stage_track_maintenance(state, t_s);
-  const auto t3 = std::chrono::high_resolution_clock::now();
+  const auto t3 = PerfClock::now();
 
   state.stats.coarse_gate_acc_s += std::chrono::duration<double>(t_gate1 - t_gate0).count();
   state.stats.fine_gate_acc_s += std::chrono::duration<double>(t_gate2 - t_gate1).count();
@@ -1823,7 +1929,7 @@ void process_scan_tick(PipelineState& state,
       t_s, state.tb, &state.changed_ids);
     did_finalize = true;
   }
-  const auto t4 = std::chrono::high_resolution_clock::now();
+  const auto t4 = PerfClock::now();
 
   // --- Scan-driven covariance aging: age all hot tracks to scan time t_s ---
   // Use TrackBatch::last_cov_prop_s as t_pred_s (P-aged-to time) per-track.
@@ -1849,16 +1955,16 @@ void process_scan_tick(PipelineState& state,
       state.tb.last_cov_prop_s[i] = t_s;
     }
 
-    const auto tc0 = std::chrono::high_resolution_clock::now();
+    const auto tc0 = PerfClock::now();
     la::rw_add_qdt_subset_var_dt(state.tb.P.data(), state.Q.data(), state.n,
                                  cov_ids.data(), dt_ids.data(), cov_ids.size());
-    const auto tc1 = std::chrono::high_resolution_clock::now();
+    const auto tc1 = PerfClock::now();
 
     state.stats.cov_age_acc_s += std::chrono::duration<double>(tc1 - tc0).count();
     ++state.stats.cov_age_calls;
     state.stats.cov_age_tracks_acc += cov_ids.size();
   }
-  const auto t5 = std::chrono::high_resolution_clock::now();
+  const auto t5 = PerfClock::now();
 
   if (did_finalize) {
     state.stats.finalize_acc_s += std::chrono::duration<double>(t4 - t3).count();
@@ -2195,7 +2301,7 @@ int demo::RunDemo(int argc, char** argv) try {
   // Step 3A-3F: Motion loop + scan-tick coarse query via pluggable index backend.
   // ------------------------------------------------------------
   if (setup_scan_context(state)) {
-    const auto loop_t0 = std::chrono::high_resolution_clock::now();
+    const auto loop_t0 = PerfClock::now();
 
     trk::ScenarioTiming timing;
     trk::run_scenario_loop(
@@ -2210,7 +2316,7 @@ int demo::RunDemo(int argc, char** argv) try {
       },
       &timing);
 
-    const auto loop_t1 = std::chrono::high_resolution_clock::now();
+    const auto loop_t1 = PerfClock::now();
     state.stats.loop_s = std::chrono::duration<double>(loop_t1 - loop_t0).count();
     state.stats.scan_tick_acc_s = timing.scan_tick_acc_s;
     state.stats.model_update_acc_s = timing.model_update_acc_s;
@@ -2243,6 +2349,7 @@ int demo::RunDemo(int argc, char** argv) try {
 
   stop_prefetch_worker(state);
   stop_candidate_worker(state);
+  stop_measurement_worker(state);
 
   // Flush any async warm commits before writing CSV so commit timings are included.
   if (state.scan.track_db) {
